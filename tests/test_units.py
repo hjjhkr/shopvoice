@@ -292,3 +292,33 @@ def test_other_shop_prices_are_grounded_and_repair_answer_speaks_the_live_price(
     state = {"evidence": ev, "intent": {"task": "price_availability_check", "constraints": {}}}
     spoken = _rule_answer(state).spoken_summary
     assert "$14.95" in spoken and "$33.40" in spoken and "amazon.com" in spoken and "in stock" in spoken
+
+
+def test_tts_output_is_rewritten_as_pcm_wav(tmp_path):
+    """macOS system TTS writes AIFF-C into a .wav path: the 15 s check then saw no duration and
+    browsers could not play the reply. The file must come out as real PCM WAV with its length."""
+    import wave
+
+    import av
+    import numpy as np
+
+    from voice_agent.speech.tts import _ensure_pcm_wav, _wav_seconds
+
+    out = tmp_path / "reply.wav"
+    with av.open(str(out), "w", format="aiff") as dst:          # what NSSpeechSynthesizer produces
+        stream = dst.add_stream("pcm_s16be", rate=22050, layout="mono")
+        frame = av.AudioFrame.from_ndarray(np.zeros((1, 22050), dtype="<i2"), format="s16", layout="mono")
+        frame.rate = 22050
+        for packet in stream.encode(frame):
+            dst.mux(packet)
+        for packet in stream.encode(None):
+            dst.mux(packet)
+    assert _wav_seconds(out) is None
+    _ensure_pcm_wav(out)
+    assert out.read_bytes()[:4] == b"RIFF"
+    assert _wav_seconds(out) == 1.0
+    with wave.open(str(out)) as w:
+        assert w.getsampwidth() == 2 and w.getnchannels() == 1
+    before = out.read_bytes()
+    _ensure_pcm_wav(out)                                          # already WAV: left untouched
+    assert out.read_bytes() == before

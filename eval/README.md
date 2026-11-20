@@ -5,7 +5,7 @@ server), not the underlying LLM. Three layers answer three different questions.
 
 | Layer | Question | Command | Output |
 |---|---|---|---|
-| Unit + pipeline tests | Does each component do what it claims? | `python -m pytest` | 34 tests |
+| Unit + pipeline tests | Does each component do what it claims? | `python -m pytest` | 39 tests |
 | Stage-level checks | *Where* in ASR -> Router -> Planner -> RAG/MCP -> Answerer -> TTS does a scenario fail? | `python eval/run_stage_checks.py [--voice]` | `eval/results/stage_checks*.json` |
 | ProofAgent harness | How does the agent hold up in a multi-turn adversarial conversation, as judged by a jury? | `python eval/run_proofagent.py` | `eval/results/proofagent_*.json/.md` |
 
