@@ -69,6 +69,16 @@ miss was the check itself: it required the words "couldn't find" and the answer 
 catalog". The check now accepts equivalent wordings, and that scenario passes 7/7 on a re-run. The voice checks
 were not run again.
 
+**Second platform (macOS, Apple Silicon, rules baseline).** The suite was re-run on macOS with `LLM_PROVIDER=rules`.
+Text: 172/172 (`results/stage_checks_rules_macos.json`), identical to the Windows baseline. Voice: the first run
+failed the TTS check in all 20 scenarios, because the macOS system voice writes AIFF-C into the `.wav` path (see the
+TTS row in the table below). After the fix: 210/212 (`results/stage_checks_voice_rules_macos.json`); TTS 40/40. Both
+misses are `noisy_transcript`. The macOS input voice is a different synthetic speaker, and Whisper returned
+"A yes-so-find-me-a-board game ... no weight 30 bucks max" (WER 0.16). The budget was still read as $30, but the
+hyphen-joined "board" token left the rules baseline with no strong match and 0 recommendations; on Windows the
+same scenario produced 2. The same audio input yields a different ASR failure on each platform, which is a reason
+to evaluate ASR with real recordings.
+
 The contrast with section 1 is the point: scripted single-purpose scenarios pass, while an adversarial attacker that
 packs several asks, false premises and quoted instructions into one message finds failures the scripted checks do not.
 
@@ -215,6 +225,7 @@ why the scored evaluation stays on the fixture.
 | Symptom | Stage | Fix |
 |---|---|---|
 | Spoken answer 16.6 s although within the 45-word cap | TTS | audio length measured; trailing sentences dropped until <= 15 s |
+| On macOS no reply audio passed the length check, and Chrome would not play it: the system voice (NSSpeechSynthesizer) writes AIFF-C even to a `.wav` path | TTS | output transcoded to 16-bit PCM WAV with PyAV when it is not RIFF; regression test `test_tts_output_is_rewritten_as_pcm_wav` |
 | "Melissa and Doug" did not match "Melissa & Doug" | RAG | brand matching ignores case, punctuation and `&`/`and` |
 | User's category "wooden puzzles" matched nothing | RAG | every word of the category must occur in the category path or title |
 | "at least four and a half stars" read as a $4 price floor | Router rules | rating phrases removed before budget parsing |

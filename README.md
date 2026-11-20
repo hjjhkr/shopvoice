@@ -27,7 +27,7 @@ results. `python scripts/refresh_showcase.py` re-records the runs shown in it.
 
 ## Quick start
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/) (or plain `pip`). No system ffmpeg is needed.
+Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/) (or plain `pip`). No system ffmpeg is needed. Tested on Windows and on macOS (Apple Silicon, Python 3.12).
 
 ```bash
 # 1. environment (Windows: scripts\setup.ps1)
@@ -46,7 +46,7 @@ python -m voice_agent.pipeline --audio question.wav --speak
 python scripts/mcp_smoke.py        # MCP discovery + one call per tool
 
 # 5. evaluate
-python -m pytest                   # 34 tests, no LLM needed
+python -m pytest                   # 39 tests, no LLM needed
 python eval/run_stage_checks.py    # stage-level checks (add --voice for TTS -> ASR -> agent -> TTS)
 python eval/run_proofagent.py      # ProofAgent scorecard -> eval/results/
 ```
@@ -236,7 +236,7 @@ Methodology, scenarios and how to reproduce: **[eval/README.md](eval/README.md)*
 failures: **[eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)**.
 
 Three layers, all run against the complete pipeline:
-1. `pytest` (34 tests): units plus end-to-end runs through the real MCP server with the LLM disabled.
+1. `pytest` (39 tests): units plus end-to-end runs through the real MCP server with the LLM disabled.
 2. `eval/run_stage_checks.py`: 20 scenarios whose expectations are attributed to a stage
    (ASR, Router, Planner, RAG/MCP, Answerer, TTS), in text mode and in voice mode.
 3. `eval/run_proofagent.py`: the ProofAgent harness (`proofagent-harness`) with 12 project-specific adversarial
@@ -248,7 +248,7 @@ Results with `claude-haiku-5-5` as the agent LLM (details, all four runs and the
 
 | Layer | Result |
 |---|---|
-| Tests | 34 / 34 |
+| Tests | 39 / 39 |
 | Stage checks, text | 172 / 172 |
 | Stage checks, voice (TTS -> ASR -> agent -> TTS) | 211 / 212 (one ASR miss on disfluent speech) |
 | ProofAgent, best complete run (run 2) | 8.94 / 10, certification SILVER |

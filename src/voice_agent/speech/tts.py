@@ -40,6 +40,33 @@ def _wav_seconds(path: Path) -> float | None:
         return None
 
 
+def _ensure_pcm_wav(path: Path) -> None:
+    """Rewrite `path` as 16-bit PCM WAV if the engine wrote another container.
+
+    macOS NSSpeechSynthesizer ignores the .wav extension and writes AIFF-C, which the `wave` module
+    cannot read (so the 15 s length check saw no duration) and Chrome will not play. PyAV ships with
+    faster-whisper, so this adds no dependency."""
+    with open(path, "rb") as f:
+        if f.read(4) == b"RIFF":
+            return
+    import av
+    import numpy as np
+
+    with av.open(str(path)) as src:
+        stream = src.streams.audio[0]
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=stream.rate)
+        chunks = [frame.to_ndarray().reshape(-1)
+                  for packet in src.decode(stream) for frame in resampler.resample(packet)]
+        chunks += [frame.to_ndarray().reshape(-1) for frame in resampler.resample(None)]
+        rate = stream.rate
+    pcm = np.concatenate(chunks).astype("<i2").tobytes() if chunks else b""
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+
+
 def _pyttsx3(text: str, out: Path, voice: str) -> None:
     txt = out.with_suffix(".txt")
     txt.write_text(text, encoding="utf-8")
@@ -48,6 +75,8 @@ def _pyttsx3(text: str, out: Path, voice: str) -> None:
                        check=True, timeout=60, capture_output=True)
     finally:
         txt.unlink(missing_ok=True)
+    if out.exists() and out.stat().st_size:
+        _ensure_pcm_wav(out)
 
 
 def _openai(text: str, out: Path, model: str, voice: str) -> None:
