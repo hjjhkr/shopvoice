@@ -1,11 +1,12 @@
 # Evaluation
 
 The evaluation targets the **complete agent** (the same LangGraph pipeline the UI runs, through the real MCP
-server), not the underlying LLM. Three layers answer three different questions.
+server), not the underlying LLM. Four layers answer four different questions.
 
 | Layer | Question | Command | Output |
 |---|---|---|---|
-| Unit + pipeline tests | Does each component do what it claims? | `python -m pytest` | 39 tests |
+| Unit + pipeline tests | Does each component do what it claims? | `python -m pytest` | 47 tests |
+| Retrieval benchmark | How good is `rag.search`, and does each part of the hybrid earn its place? | `python eval/run_retrieval_eval.py` | `eval/results/retrieval_eval.{md,json}` |
 | Stage-level checks | *Where* in ASR -> Router -> Planner -> RAG/MCP -> Answerer -> TTS does a scenario fail? | `python eval/run_stage_checks.py [--voice]` | `eval/results/stage_checks*.json` |
 | ProofAgent harness | How does the agent hold up in a multi-turn adversarial conversation, as judged by a jury? | `python eval/run_proofagent.py` | `eval/results/proofagent_*.json/.md` |
 
@@ -75,6 +76,54 @@ proof run eval/proofagent/agent.py --context-dir eval/proofagent/context \
 Choose a strong harness model for a scorecard you intend to report: the harness documentation notes that a weak
 judge gives noisy scores. A local judge (`ollama_chat/qwen3:14b`, `PROOFAGENT_REASONING_EFFORT=none`) works for a
 smoke run but is slow (about a minute per jury call on an RTX 5090) and less reliable.
+
+## Retrieval benchmark
+
+[run_retrieval_eval.py](run_retrieval_eval.py) calls `ProductStore.search`, the function behind `rag.search`.
+It doesn't use the LLM or the MCP transport, so a run takes about 30 s and gives the same result every time. The
+queries and relevance criteria are in [retrieval/queries.yaml](retrieval/queries.yaml).
+
+**Queries (65).**
+
+| Type | n | Relevance | Metrics |
+|---|---|---|---|
+| Named known item ("Melissa and Doug safari chunky puzzle") | 22 | the product's doc_id, found by title search and checked by hand | Hit@1, Hit@5, MRR@10 |
+| Described known item ("purple plush cat with a unicorn horn that makes a sound") | 9 | same; the description is taken from the product's feature text, so it shares few words with the title | Hit@1, Hit@5, MRR@10 |
+| Attribute ("wooden puzzle for a toddler", max $20) | 24 | a rule over title, text, category and age: grade 1 = the kind of product asked for, grade 2 = also meets the preferences (e.g. age). Filters are applied as the Planner applies them | P@5 (over min(5, relevant in catalog)), nDCG@10 against the best possible ordering |
+| No match ("gas lawn mower for my yard") | 10 | nothing relevant exists; only toys share the words | false match = a `strong` label in the top 5 |
+
+**Why rules, not hand-picked lists.** Relevance never comes from a retriever's output, because then a method would
+be graded on its own picks. The criteria were written first. They were then **audited**: `--audit` lists every
+product that any mode put in its top 5 and the rules graded 0. Reading that list turned up 20 relevant products the
+first criteria had missed. For example, "Battery Powered" RC cars were excluded as parts, and magnetic tiles turned
+out to be filed under "Magnetic & Felt Playboards". The criteria were corrected, and every mode was re-scored with
+the corrected version. What is still graded 0 in any top 5 is genuinely off-target: pool floats for "water gun",
+replacement wheels for "kick scooter".
+
+**Ablation.** `search(mode=...)` turns off one component at a time:
+- `dense`: vector similarity only.
+- `bm25`: BM25 only.
+- `hybrid_rrf`: reciprocal rank fusion of both, without the title rerank.
+- `hybrid`: the default, which the agent uses.
+
+Filters and relevance labels are identical in every mode. Besides the means, the report gives **paired** win/loss
+counts per attribute query. With 24 queries, a difference in the mean can come from one or two queries, and the
+paired counts show whether it does.
+
+**Labels.** The agent only uses `strong` hits as evidence, so the report also scores the label:
+- precision and recall of `strong` in the top 5;
+- **missed matches**: a relevant product is retrieved, but none of the relevant ones is labelled strong;
+- **false matches**: a no-match query gets a strong hit.
+
+**Commands.**
+
+```bash
+python eval/run_retrieval_eval.py                       # all modes -> eval/results/retrieval_eval.{md,json}
+python eval/run_retrieval_eval.py --show water_gun      # top 10 per mode, with grades, for one query
+python eval/run_retrieval_eval.py --audit               # top-5 products the criteria grade 0, for review
+```
+
+Results and the two failures traced end to end are in [FAILURE_ANALYSIS.md](FAILURE_ANALYSIS.md) (section 2b, F11, F12).
 
 ## Stage-level checks
 

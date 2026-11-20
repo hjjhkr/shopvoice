@@ -82,6 +82,27 @@ to evaluate ASR with real recordings.
 The contrast with section 1 is the point: scripted single-purpose scenarios pass, while an adversarial attacker that
 packs several asks, false premises and quoted instructions into one message finds failures the scripted checks do not.
 
+## 2b. Retrieval benchmark
+
+This runs `rag.search` with no LLM on 65 queries; the method is in [README.md](README.md#retrieval-benchmark).
+Raw results: `results/retrieval_eval.{md,json}`.
+
+| Mode | Named item Hit@1 / MRR | Described item Hit@1 / Hit@5 | Attribute P@5 | Attribute nDCG@10 |
+|---|---|---|---|---|
+| dense only | 0.91 / 0.947 | 0.89 / 1.00 | 0.84 | 0.816 |
+| BM25 only | 1.00 / 1.000 | 0.89 / 1.00 | 0.87 | 0.786 |
+| hybrid (RRF), no rerank | 1.00 / 1.000 | 0.78 / 1.00 | 0.90 | 0.847 |
+| **hybrid + title rerank (used by the agent)** | **1.00 / 1.000** | **0.78 / 1.00** | **0.92** | **0.865** |
+
+- **Each component helps on attribute requests.** Per query (nDCG@10), the hybrid beats dense on 13 queries and
+  loses on 3. It beats BM25 12 to 4. The title rerank beats plain fusion 11 to 3.
+- **Named products.** Dense alone misses rank 1 twice (the Crayola easel ranked 2nd, the Step2 kitchen 3rd); every
+  mode that includes BM25 gets all 22 right.
+- **Described products.** All 9 are in the top 5 in every mode. The hybrid has 2 of them at rank 2 instead of 1.
+  On 9 queries that is a difference of one query, so it is a tie, not a finding.
+- **`strong` label.** Precision 0.91 and recall 1.00 in the top 5 of attribute queries. No attribute query loses
+  its match to a `weak` label. The two weaknesses are F11 and F12.
+
 ## 3. Failure cases
 
 Each case: what happened, the stage at fault, evidence, cause, and what was changed or is still open.
@@ -220,6 +241,41 @@ approved by the Critic on the first draft, each with a cited live URL and both p
 between calls (one LEGO run returned no price at all, the next returned $11.89 and "out of stock"), which is
 why the scored evaluation stays on the fixture.
 
+### F11. A product in the catalog reported as "not found" (RAG ranking) - retrieval benchmark; open
+
+- **What happened.** "I want a water gun for the pool" -> "I couldn't find a match for water gun for pool in the
+  catalog". The catalog has the Super Soaker Hydra and the Super Soaker Floodtastic, which are listed under
+  "Pools & Water Toys > Squirt Guns".
+- **Stage and cause.** Dense search ranks the Hydra first. BM25 has nothing to match it on, because its title
+  contains neither "water" nor "gun". It does match many pool floats and dive sticks on "water" and "pool", so
+  fusion and the title-coverage rerank fill the hybrid's top 10 with pool toys. All of them are labelled `strong`.
+  The Retriever's head-noun check ("gun") then correctly discards them. That leaves no evidence, so the answer is
+  the no-match template.
+- **Why the label metrics missed it.** No relevant product reached the hybrid's top 5 at all, so "missed match"
+  (a relevant item retrieved but labelled weak) never fired. The ranking metric caught it: P@5 is 0 for the hybrid
+  and 0.33 for dense.
+- **Proposed improvement.** A cross-encoder reranker over a larger fused candidate pool (the top 30) would score
+  "Super Soaker Hydra: drench targets with cannon-blasts of water" against "water gun" directly. Synonym expansion
+  for BM25 ("water gun" -> squirt gun, water blaster, soaker) is a cheaper partial fix. Measure either one with
+  `eval/run_retrieval_eval.py --show water_gun`.
+
+### F12. A toy recommended for an adult product (RAG label -> Answerer) - retrieval benchmark; open
+
+- **What happened.** "Recommend a gas lawn mower for my yard" -> "My top pick is Little Tikes Gas 'n Go Mower at
+  $24.99". That is a toddler's toy. "Espresso machine for my kitchen" gets a `strong` label on a toy coffee maker
+  too, but the agent catches that one.
+- **Stage and cause.** The relevance label is similarity plus title-term coverage. "Gas", "mower" and "lawn"
+  appear in the toy's title, so it is `strong`. The head-noun check passes it, because "mower" is in the title. The
+  espresso case is stopped only because its head noun ("machine") is missing from the toy's title. So the agent was
+  protected by wording, not by understanding.
+- **Observed with** `LLM_PROVIDER=rules` (template Answerer). An LLM Answerer may add a caveat; this has not been
+  checked with Claude yet.
+- **Proposed improvement.** Add a toy/real mismatch check. The catalog is 67% Toys & Games, so when a request
+  implies an adult product (gas, cordless, for my yard / kitchen / car) and the evidence is a toy (Toys & Games or
+  Pretend Play category, "toy" or "pretend" in the title), the match is downgraded to weak and listed as a near miss
+  ("the catalog only has a toy version"). A cross-encoder reranker would also score "gas lawn mower for my yard"
+  against "toddler push mower with sounds" much lower than the bi-encoder does.
+
 ### Smaller issues, all fixed
 
 | Symptom | Stage | Fix |
@@ -243,6 +299,8 @@ why the scored evaluation stays on the fixture.
 | ASR errors on disfluent speech and proper nouns | ASR | voice check `noisy_transcript` (WER 0.26); "Tsuro" heard as "Tzuru" in an earlier voice run | catalog vocabulary as Whisper hotwords; fuzzy match against brand/title tokens; confirm low-confidence names. Input audio in the voice checks is synthetic speech, so real microphones will do worse |
 | Refusals do not name the rule they rest on | Router | Safety 8.07 in run 4 | cite the specific harm and rule in each fixed reply |
 | Relevance thresholds are heuristics tied to one embedding model | RAG | F3 | cross-encoder reranker or an LLM relevance grader over the top 10 |
+| Lexical rerank buries a product whose title lacks the query words | RAG | F11 (water gun: dense rank 1, hybrid not in top 10) | cross-encoder reranker over the top 30 fused candidates; BM25 synonym expansion |
+| Toy look-alikes labelled `strong` for adult products | RAG / Answerer | F12; 2/10 no-match queries in the retrieval benchmark | toy/real mismatch check; cross-encoder reranker |
 | Wording varies between identical requests | Answerer | determinism 0.30 | providers that accept a seed; or cache the answer per (conversation state, message) |
 | Small judge returns invalid JSON on long transcripts | evaluation | run 1; 2-10 fallback calls per run | a stronger primary judge |
 
@@ -253,7 +311,7 @@ why the scored evaluation stays on the fixture.
 | ASR | disfluency, proper nouns | highest for real microphones |
 | Router | F1, F2, F5 | one label and one budget per message; mitigated by named-product lookup and rule cross-checks |
 | Planner | none of its own | low: policy is enforced in code |
-| RAG/MCP | F3, F4, F6, brand and category matching | relevance heuristics |
+| RAG/MCP | F3, F4, F6, F11, F12, brand and category matching | relevance heuristics: lexical rerank (F11), toy look-alikes (F12) |
 | Answerer / Critic | F7, F8, F9, uncorrected premises | depends on the model; the Critic and the evidence-only repair path bound the damage |
 | TTS | length | low |
 

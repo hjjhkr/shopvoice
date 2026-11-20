@@ -46,7 +46,8 @@ python -m voice_agent.pipeline --audio question.wav --speak
 python scripts/mcp_smoke.py        # MCP discovery + one call per tool
 
 # 5. evaluate
-python -m pytest                   # 39 tests, no LLM needed
+python -m pytest                   # 47 tests, no LLM needed
+python eval/run_retrieval_eval.py  # retrieval benchmark + ablation, no LLM (about 30 s)
 python eval/run_stage_checks.py    # stage-level checks (add --voice for TTS -> ASR -> agent -> TTS)
 python eval/run_proofagent.py      # ProofAgent scorecard -> eval/results/
 ```
@@ -119,6 +120,29 @@ price, brand, top category, sku, rating (when present).
 3. Reciprocal rank fusion, then a light rerank by query-term coverage of the title.
 4. Each hit is labelled `relevance: strong | weak`. Vector search always returns nearest neighbours, so this label
    is how the agent tells "no such product" from a match. Only strong hits become evidence.
+
+**Retrieval quality.** `eval/run_retrieval_eval.py` benchmarks `rag.search` directly (no LLM) on 65 queries:
+- 22 that name a product and 9 that only describe it;
+- 24 attribute requests ("wooden puzzle for a toddler under $20"), where relevance is a rule over catalog fields,
+  written before any retrieval was run and then audited against every mode's top 5;
+- 10 requests for things the catalog does not sell.
+
+Each component is switched off in turn with `ProductStore.search(mode=...)`
+([results](eval/results/retrieval_eval.md), method in [eval/README.md](eval/README.md#retrieval-benchmark)):
+
+| Mode | Named item Hit@1 | Described item Hit@5 | Attribute P@5 | Attribute nDCG@10 |
+|---|---|---|---|---|
+| dense only | 0.91 | 1.00 | 0.84 | 0.816 |
+| BM25 only | 1.00 | 1.00 | 0.87 | 0.786 |
+| hybrid (RRF), no rerank | 1.00 | 1.00 | 0.90 | 0.847 |
+| **hybrid + title rerank (used)** | **1.00** | **1.00** | **0.92** | **0.865** |
+
+Per query, the hybrid wins 13 / loses 3 against dense and 12 / 4 against BM25 (nDCG@10). The rerank wins 11 /
+loses 3 against plain fusion. The `strong` label has precision 0.91 and recall 1.00 in the top 5. It has two known
+weaknesses, both traced end to end in [FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md) (F11, F12):
+- toy look-alikes are labelled strong for 2 of the 10 no-match requests (a toy coffee maker for "espresso
+  machine", a toy mower for "gas lawn mower");
+- "water gun for the pool" loses the Super Soaker that dense search ranks first.
 
 ## LangGraph architecture
 
@@ -235,11 +259,13 @@ caching, rate limiting and logging are in **[docs/MCP.md](docs/MCP.md)**.
 Methodology, scenarios and how to reproduce: **[eval/README.md](eval/README.md)**. Results and the analysis of
 failures: **[eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)**.
 
-Three layers, all run against the complete pipeline:
-1. `pytest` (39 tests): units plus end-to-end runs through the real MCP server with the LLM disabled.
-2. `eval/run_stage_checks.py`: 20 scenarios whose expectations are attributed to a stage
+Four layers, all run against the complete pipeline (or, for retrieval, the component the agent calls):
+1. `pytest` (47 tests): units plus end-to-end runs through the real MCP server with the LLM disabled.
+2. `eval/run_retrieval_eval.py`: retrieval benchmark of `rag.search` (65 queries) with an ablation of each
+   component (see [Retrieval quality](#data-preprocessing-and-indexing)).
+3. `eval/run_stage_checks.py`: 20 scenarios whose expectations are attributed to a stage
    (ASR, Router, Planner, RAG/MCP, Answerer, TTS), in text mode and in voice mode.
-3. `eval/run_proofagent.py`: the ProofAgent harness (`proofagent-harness`) with 12 project-specific adversarial
+4. `eval/run_proofagent.py`: the ProofAgent harness (`proofagent-harness`) with 12 project-specific adversarial
    scenarios in `eval/proofagent/traps/`, jury scoring on task success, hallucination resistance, tool use, safety,
    manipulation resistance and instruction following.
 
@@ -248,7 +274,8 @@ Results with `claude-haiku-5-5` as the agent LLM (details, all four runs and the
 
 | Layer | Result |
 |---|---|
-| Tests | 39 / 39 |
+| Tests | 47 / 47 |
+| Retrieval (hybrid, no LLM) | named-item Hit@1 1.00; attribute P@5 0.92, nDCG@10 0.865; 2/10 false matches |
 | Stage checks, text | 172 / 172 |
 | Stage checks, voice (TTS -> ASR -> agent -> TTS) | 211 / 212 (one ASR miss on disfluent speech) |
 | ProofAgent, best complete run (run 2) | 8.94 / 10, certification SILVER |
@@ -290,7 +317,10 @@ $0.3-1.4, most of it the stronger fallback judge.
 - The 2020 dataset has no ratings, reviews, brand or ingredient fields, and little outside toys and games; the
   brief's cleaner example returns "no match" by design.
 - Relevance labelling uses similarity thresholds calibrated for the default MiniLM embeddings
-  (`RAG_STRONG_SIM`, `RAG_WEAK_SIM`); another embedding model needs recalibration.
+  (`RAG_STRONG_SIM`, `RAG_WEAK_SIM`); another embedding model needs recalibration. It cannot tell a toy from the
+  real product ("gas lawn mower" -> a toy mower, labelled strong).
+- The retrieval benchmark has 65 queries, written and judged by the team. Differences of one or two queries
+  between modes are within noise; the paired win/loss counts are the more reliable comparison.
 - Live price extraction parses search snippets, so it depends on what the search API returns: the same price
   check returned no price on one run and a price from two shops on the next. Shops are not vetted; the answer
   cites the URL so the user can check it.
@@ -313,6 +343,7 @@ src/voice_agent/
   ui/app.py                 Streamlit
 prompts/                    all prompts + mapping to nodes
 eval/                       ProofAgent config, scenarios, runners, results, failure analysis
+  retrieval/queries.yaml    retrieval benchmark queries and relevance criteria
 docs/MCP.md                 tool schemas
 scripts/                    setup, build_index, run_mcp, run_ui, run_eval (.sh and .ps1), mcp_smoke.py
 tests/                      pytest

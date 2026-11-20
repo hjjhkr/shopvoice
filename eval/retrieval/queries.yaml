@@ -1,0 +1,229 @@
+# Retrieval benchmark for rag.search (ProductStore.search). Used by eval/run_retrieval_eval.py.
+#
+# Relevance is NOT taken from any retriever's output, so no method is graded on its own picks.
+#   known_item : the user names one product; `targets` are its doc_ids (found with a title search, checked by hand).
+#                Queries are phrased the way a user would say them ("Melissa and Doug", no model numbers),
+#                not copied from the title.
+#   attribute  : relevance is a rule over catalog fields, written before any retrieval was run:
+#                  relevant : grade 1 = the kind of product asked for. Every key must match (AND);
+#                             the patterns inside one key are alternatives (OR).
+#                  ideal    : grade 2 = also meets the softer preferences (age, style).
+#                  exclude_title / exclude_category : never relevant (accessories, refills, parts).
+#                Pattern keys: title (title), text (title + features + description), category (category path).
+#                age_max: manufacturer minimum age <= N years (unknown age does not satisfy it).
+#                `filters` are passed to rag.search exactly as the Planner would, and relevance also respects them.
+#   no_match   : nothing in the catalog fits. Only toys share the words (toy laptop, toy coffee maker,
+#                bubble mower), so a `strong` label in the top 5 counts as a false match.
+#
+# The criteria were checked by listing every matching product and reading a sample of titles, then audited
+# against every product any mode placed in its top 5 (eval/run_retrieval_eval.py --audit). The audit found 20
+# relevant products the first criteria graded 0, and the criteria were fixed (e.g. "battery powered" RC cars excluded as parts, "Super Hero" spelled as two words,
+# magnetic tiles filed under "Magnetic & Felt Playboards"); the criteria key `any` is an OR of sub-criteria;
+# the fixed criteria apply to every mode equally.
+
+queries:
+  # ---------------------------------------------------------------- attribute
+  - id: wooden_puzzle_toddler
+    type: attribute
+    query: wooden puzzle for a toddler
+    filters: {max_price: 20}
+    relevant: {title: ['\bpuzzle'], text: ['\bwood']}
+    ideal: {age_max: 3}
+
+  - id: stem_building_kit
+    type: attribute
+    query: STEM building kit for an 8 year old
+    relevant:
+      title: ['\bstem\b', 'engineering', 'building', 'construction']
+      category: ['Building Toys', 'Science Kits', 'Learning & Education']
+    ideal: {age_max: 8}
+
+  - id: plush_unicorn
+    type: attribute
+    query: unicorn stuffed animal
+    relevant: {title: ['unicorn'], category: ['Stuffed Animals', 'Plush']}
+
+  - id: family_board_game
+    type: attribute
+    query: board game for family night
+    filters: {max_price: 30}
+    relevant: {title: ['board game', '\bgame\b'], category: ['Board Games']}
+    ideal: {text: ['family']}
+
+  - id: jigsaw_1000
+    type: attribute
+    query: 1000 piece jigsaw puzzle for adults
+    relevant: {title: ['1000[- ]?(?:pc|piece)', '1,000'], category: ['Puzzles']}
+
+  - id: rc_car
+    type: attribute
+    query: remote control car for kids
+    relevant:
+      any:
+        - {title: ['remote control', '\brc\b', 'r/c', 'radio control'], text: ['\bcar\b', 'truck', 'racer', 'vehicle']}
+        - {category: ['Controlled Vehicles > (?:Cars|Trucks)']}
+    exclude_title: ['\btires?\b', 'replacement wheels?', 'skin', 'receiver', 'servo', 'charger', 'control board', 'replacement', 'spare', 'sheet']
+    exclude_category: ['Vehicle Parts']     # the parts branch; vehicles sit under "Vehicles & Parts > ... Vehicles"
+
+  - id: art_easel
+    type: attribute
+    query: kids art easel
+    relevant: {title: ['\beasel\b']}
+    exclude_title: ['easel pads?', 'paper roll \(', 'refill']   # paper refills, not easels
+
+  - id: dinosaur_toy
+    type: attribute
+    query: uh I'm looking for like a dinosaur toy for my three year old
+    relevant: {title: ['dinosaur', '\bdino\b', 't-rex', 'saurus', 'raptor', 'triceratops', 'jurassic']}
+    ideal: {age_max: 3}
+
+  - id: girls_costume
+    type: attribute
+    query: halloween costume for a girl
+    relevant: {title: ['costume'], text: ['\bgirl']}
+
+  - id: baby_teether
+    type: attribute
+    query: teething toy for a baby
+    relevant: {title: ['teeth(?:e|er|ing)\b']}
+
+  - id: water_gun
+    type: attribute
+    query: water gun for the pool
+    relevant: {title: ['water gun', 'water blaster', 'squirt gun', 'water pistol', 'soaker']}
+
+  - id: play_kitchen
+    type: attribute
+    query: pretend play kitchen set
+    relevant: {title: ['kitchen', 'cooker', 'stove', 'cookware', 'pots and pans'], category: ['Pretend Play', 'Kitchen Toys']}
+    ideal: {category: ['Kitchen Playsets']}
+
+  - id: magnetic_tiles
+    type: attribute
+    query: magnetic building tiles
+    relevant: {title: ['magnetic', 'magnet'], text: ['\btiles?\b', 'blocks?', 'building']}
+
+  - id: kite
+    type: attribute
+    query: a kite to fly at the beach
+    relevant: {title: ['\bkites?\b']}
+
+  - id: lego_under_5
+    type: attribute
+    query: LEGO set
+    filters: {max_price: 5, brand: LEGO}
+    relevant: {title: ['\blego\b']}
+
+  - id: melissa_doug_under_15
+    type: attribute
+    query: Melissa and Doug toy
+    filters: {max_price: 15, brand: Melissa and Doug}
+    relevant: {title: ['melissa (?:&|and) doug']}
+
+  - id: party_balloons
+    type: attribute
+    query: balloons for a birthday party
+    relevant: {title: ['balloon']}
+    exclude_title: ['bank', 'pump', 'weight', 'strip']
+
+  - id: kick_scooter
+    type: attribute
+    query: kick scooter for kids
+    relevant: {title: ['scooter'], category: ['Scooter', 'Ride-On']}
+    exclude_title: ['skin', 'figure', 'compatible', 'helmet', 'grip', 'replacement', 'hoverboard', 'scooter board']
+    ideal: {title: ['kick']}
+
+  - id: hand_puppet
+    type: attribute
+    query: animal hand puppet
+    relevant: {title: ['puppet']}
+    exclude_title: ['card', 'golf']
+    ideal: {title: ['hand puppet']}
+
+  - id: card_game
+    type: attribute
+    query: a card game to play with friends
+    relevant: {any: [{title: ['card game']}, {category: ['Card Games']}]}
+    exclude_title: ['shirt']
+
+  - id: baby_rattle
+    type: attribute
+    query: rattle for a newborn
+    relevant: {title: ['rattle']}
+
+  - id: superhero_figure
+    type: attribute
+    query: superhero action figure
+    relevant:
+      title: ['figure']
+      text: ['marvel', 'super ?heroe?s?', 'avengers', 'batman', 'spider-man', 'superman', 'dc comics', 'justice league']
+
+  - id: science_kit
+    type: attribute
+    query: science experiment kit
+    relevant: {title: ['science', 'experiment'], text: ['\bkit\b', 'experiment']}
+
+  - id: chess_set
+    type: attribute
+    query: wooden chess set
+    relevant: {title: ['\bchess']}
+    exclude_title: ['chessex']   # a dice brand
+    ideal: {text: ['\bwood']}
+
+  # ---------------------------------------------------------------- known item
+  - {id: ki_safari_puzzle, type: known_item, query: Melissa and Doug safari chunky puzzle, targets: [amz20-7bf4d392c47b]}
+  - {id: ki_lego_suitcase, type: known_item, query: LEGO classic creative suitcase, targets: [amz20-7e063675c29a]}
+  - {id: ki_tsuro, type: known_item, query: the Tsuro game of the path, targets: [amz20-ee0873676d88]}
+  - {id: ki_lion_king_monopoly, type: known_item, query: Lion King Monopoly, targets: [amz20-f54676a4d015]}
+  - {id: ki_razor_t3, type: known_item, query: Razor junior T3 scooter, targets: [amz20-8ab9a21739cf]}
+  - {id: ki_pusheenicorn, type: known_item, query: the Pusheen unicorn cat plush that makes a sound, targets: [amz20-d92c10e1df81]}
+  - {id: ki_retro_kitchen, type: known_item, query: KidKraft pink retro kitchen with a fridge, targets: [amz20-44d89a4bf8c5]}
+  - {id: ki_wolf_puppet, type: known_item, query: Folkmanis wolf pup puppet, targets: [amz20-fe4ed4aa718d]}
+  - {id: ki_newtons_beads, type: known_item, query: Steve Spangler Newton's beads experiment, targets: [amz20-072c3ae9f273]}
+  - {id: ki_physics_pro, type: known_item, query: Thames and Kosmos physics pro kit, targets: [amz20-2a3b2924f338]}
+  - {id: ki_magformers, type: known_item, query: Magformers magic space set with 55 pieces, targets: [amz20-c0069db4fed6]}
+  - {id: ki_frida, type: known_item, query: Frida Kahlo portrait thousand piece puzzle, targets: [amz20-a232e83df7a7]}
+  - {id: ki_giganto, type: known_item, query: Giganto roar and stomp figure, targets: [amz20-adc4372cd555]}
+  - {id: ki_bohnanza, type: known_item, query: Bohnanza bean card game, targets: [amz20-d5da00041b07]}
+  - {id: ki_crayola_easel, type: known_item, query: Crayola wooden easel with a chalkboard, targets: [amz20-9b291f6d1638]}
+  - {id: ki_super_soaker, type: known_item, query: Super Soaker Hydra, targets: [amz20-afedde0dbe30]}
+  - {id: ki_teething_ball, type: known_item, query: Itzy Ritzy teething ball with toothbrush, targets: [amz20-053fb8bb6198]}
+  - {id: ki_media_room, type: known_item, query: Hape dollhouse media room furniture, targets: [amz20-2b63cd8ac235]}
+  - {id: ki_solitaire_chess, type: known_item, query: ThinkFun solitaire chess, targets: [amz20-7ec4474b6158]}
+  - {id: ki_prism_bora, type: known_item, query: Prism Bora parafoil kite, targets: [amz20-e2baa87b9a39, amz20-b6396a48f994]}
+  - {id: ki_dog_man, type: known_item, query: Dog Man attack of the fleas board game, targets: [amz20-4e2063a5d109]}
+  - {id: ki_dream_kitchen, type: known_item, query: Step2 dream kitchen, targets: [amz20-06e8480f75c0]}
+
+  # ---------------------------------------------------------------- no match
+  - {id: nm_steel_cleaner, type: no_match, query: eco-friendly stainless steel cleaner}
+  - {id: nm_laptop, type: no_match, query: laptop for college work}
+  - {id: nm_espresso, type: no_match, query: espresso machine for my kitchen}
+  - {id: nm_lawn_mower, type: no_match, query: gas lawn mower for my yard}
+  - {id: nm_earbuds, type: no_match, query: noise cancelling wireless earbuds}
+  - {id: nm_dog_food, type: no_match, query: dry dog food for a large dog}
+  - {id: nm_printer_ink, type: no_match, query: printer ink cartridges}
+  - {id: nm_running_shoes, type: no_match, query: men's running shoes size 10}
+  - {id: nm_vitamins, type: no_match, query: multivitamin supplements for adults}
+  - {id: nm_car_tires, type: no_match, query: winter tires for my car}
+
+  # ------------------------------------------------ known item, described without its name (semantic recall)
+  # The user remembers what the product is or does, not what it is called. Descriptions come from the product's
+  # own feature text, so the right answer is unambiguous, but the query shares few words with the title.
+  - {id: kd_tsuro, type: known_item, descriptive: true, targets: [amz20-ee0873676d88],
+     query: strategy board game where you lay tiles to build paths and try to stay on the board}
+  - {id: kd_pusheenicorn, type: known_item, descriptive: true, targets: [amz20-d92c10e1df81],
+     query: purple plush cat with a unicorn horn that makes a sound when you squeeze it}
+  - {id: kd_physics_pro, type: known_item, descriptive: true, targets: [amz20-2a3b2924f338],
+     query: advanced physics kit where you build a wind tunnel and a hydraulic lift}
+  - {id: kd_solitaire_chess, type: known_item, descriptive: true, targets: [amz20-7ec4474b6158],
+     query: a chess puzzle game you can play alone}
+  - {id: kd_dog_man, type: known_item, descriptive: true, targets: [amz20-4e2063a5d109],
+     query: cooperative board game based on the Dav Pilkey books where you stop the fleas}
+  - {id: kd_retro_kitchen, type: known_item, descriptive: true, targets: [amz20-44d89a4bf8c5],
+     query: pink wooden play kitchen with a fridge and a dishwasher whose doors open}
+  - {id: kd_super_soaker, type: known_item, descriptive: true, targets: [amz20-afedde0dbe30],
+     query: big water blaster with a 65 ounce tank that fires cannon blasts of water}
+  - {id: kd_teething_ball, type: known_item, descriptive: true, targets: [amz20-053fb8bb6198],
+     query: lemon shaped silicone teether that doubles as a training toothbrush}
+  - {id: kd_lego_case, type: known_item, descriptive: true, targets: [amz20-7e063675c29a],
+     query: yellow carrying case full of classic building bricks}
