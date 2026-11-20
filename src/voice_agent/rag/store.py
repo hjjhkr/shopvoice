@@ -19,6 +19,7 @@ import pandas as pd
 
 from ..config import Settings, get_settings
 
+SEARCH_MODES = ("hybrid", "hybrid_rrf", "dense", "bm25")
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = set("a an the and or for with of to in on at by from is are be it this that i me my need want "
             "looking find recommend show get buy some any good best please under below over than less more "
@@ -173,7 +174,14 @@ class ProductStore:
         brand: str | None = None,
         category: str | None = None,
         min_rating: float | None = None,
+        mode: str = "hybrid",
     ) -> list[dict[str, Any]]:
+        """`mode` selects the ranking, for the retrieval ablation (eval/run_retrieval_eval.py):
+        hybrid (default, what the agent uses) = RRF of dense + BM25, then the title-coverage rerank;
+        hybrid_rrf = RRF only; dense = vector similarity only; bm25 = BM25 only.
+        Filters and relevance labels are the same in every mode."""
+        if mode not in SEARCH_MODES:
+            raise ValueError(f"mode must be one of {SEARCH_MODES}, got {mode!r}")
         top_k = max(1, min(int(top_k), 20))
         mask = self._mask(max_price, min_price, brand, category, min_rating)
         allowed = set(self.df.index[mask])
@@ -212,10 +220,18 @@ class ProductStore:
             coverage = (sum(t in title_tokens for t in q_tokens) / len(q_tokens)) if q_tokens else 0.0
             return fused[d] * (1.0 + 0.6 * coverage)
 
-        ranked = sorted(fused, key=rerank, reverse=True)[:top_k]
+        if mode == "dense":
+            score = dense_sim
+        elif mode == "bm25":
+            score = dict(sparse)
+        elif mode == "hybrid_rrf":
+            score = fused
+        else:
+            score = {d: rerank(d) for d in fused}
+        ranked = sorted(score, key=score.get, reverse=True)[:top_k]
         out = []
         for d in ranked:
-            item = self._to_result(d, rerank(d), dense_sim.get(d))
+            item = self._to_result(d, score[d], dense_sim.get(d))
             item["relevance"] = self._relevance(d, q_tokens, dense_sim.get(d), brand_matched=bool(brand))
             out.append(item)
         return out
