@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Agentic voice-to-voice assistant for e-commerce product discovery (LangGraph + MCP + RAG)"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=0.2",
+    "langchain>=0.3",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-anthropic>=0.2",
+    "langchain-ollama>=0.2",
+    "mcp>=1.9,<2",
+    "chromadb>=1.0",
+    "rank-bm25>=0.2.2",
+    "pandas>=2.0",
+    "pyarrow>=15",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "httpx>=0.24",
+    "pyyaml>=6.0",
+    "streamlit>=1.40",
+    "faster-whisper>=1.1",
+    "pyttsx3>=2.98",
+    "openai>=1.50",
+    "kagglehub>=0.3",
+]
+
+[project.optional-dependencies]
+eval = ["proofagent-harness>=0.14"]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

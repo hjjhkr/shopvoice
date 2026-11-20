@@ -1,0 +1,14 @@
+# Streamlit theme for the ShopVoice UI (same palette as index.html).
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#f9f9f7"
+secondaryBackgroundColor = "#f1f0ec"
+textColor = "#0b0b0b"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

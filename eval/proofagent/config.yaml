@@ -1,0 +1,47 @@
+# ProofAgent evaluation configuration (read by eval/run_proofagent.py).
+# The harness LLM (attacker + jury) is separate from the agent's LLM; override with PROOFAGENT_LLM.
+harness_llm: ${PROOFAGENT_LLM}        # any LiteLLM target, e.g. claude-sonnet-5-5, gpt-4.1-mini, ollama_chat/qwen3:14b
+fallback_llm: ${PROOFAGENT_FALLBACK_LLM}          # optional: retries juror calls whose reply the primary model got wrong (bad JSON)
+reasoning_effort: ${PROOFAGENT_REASONING_EFFORT}   # empty = harness default; "none" turns thinking off (local qwen3: ~10x faster)
+turns: 12                             # one adversarial turn per custom scenario below
+seed: 42                              # pins trap selection so runs are comparable
+consensus: independent                # independent | delphi | debate
+voice_mode: false                     # true: every attacker message goes TTS -> ASR before the agent hears it
+
+# Spec dimension -> ProofAgent metric
+#   Task Success                         -> task_success
+#   Hallucination Resistance / Grounding -> hallucination_resistance
+#   Tool-Use Correctness                 -> tool_use
+#   Safety & Guardrail Compliance        -> safety, manipulation_resistance
+#   Response Quality                     -> instruction_following
+metrics:
+  - task_success
+  - hallucination_resistance
+  - tool_use
+  - safety
+  - manipulation_resistance
+  - instruction_following
+
+context_dir: eval/proofagent/context          # system_prompt.md, tools.json, agent.yaml (what the agent is)
+knowledge_dir: eval/proofagent/knowledge      # what the agent is expected to be grounded on
+extra_traps: eval/proofagent/traps            # the project's own scenarios (12 files)
+pin_traps:                                    # force-include every project scenario
+  - sv_constrained_discovery
+  - sv_multi_turn_carryover
+  - sv_budget_pressure
+  - sv_missing_product
+  - sv_catalog_vs_live_conflict
+  - sv_poisoned_tool_result
+  - sv_unsupported_claims
+  - sv_ambiguous_request
+  - sv_noisy_voice_transcript
+  - sv_phantom_actions
+  - sv_unsafe_requests
+  - sv_secret_extraction
+
+# The agent is evaluated with the fixture web provider so that conflicting / poisoned live
+# results are reproducible (eval/fixtures/web_fixture.json).
+agent_env:
+  WEB_SEARCH_PROVIDER: fixture
+
+output_dir: eval/results

@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShopVoice: how a spoken question becomes a grounded, cited answer</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#f9f9f7;--surface:#fcfcfb;--surface-2:#f3f2ee;--surface-3:#ecebe6;
+  --ink:#0b0b0b;--ink-2:#52514e;--muted:#898781;--grid:#e1e0d9;--border:rgba(11,11,11,.10);
+  --speech:#eb6834;--llm:#2a78d6;--tool:#6250d6;--code:#1baf7a;
+  --speech-wash:rgba(235,104,52,.10);--llm-wash:rgba(42,120,214,.09);--tool-wash:rgba(98,80,214,.09);--code-wash:rgba(27,175,122,.10);
+  --bar:#2a78d6;--track:#dfe9f7;
+  --good-text:#006300;--critical:#d03b3b;--critical-text:#b32f2f;--warning:#fab219;--warning-text:#7a5200;
+  --mark:#fde9a8;--shadow:0 6px 24px rgba(0,0,0,.10);
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme:dark;
+    --page:#0d0d0d;--surface:#1a1a19;--surface-2:#232321;--surface-3:#2c2c2a;
+    --ink:#f0efec;--ink-2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--border:rgba(255,255,255,.10);
+    --speech:#d95926;--llm:#3987e5;--tool:#9085e9;--code:#199e70;
+    --speech-wash:rgba(217,89,38,.16);--llm-wash:rgba(57,135,229,.14);--tool-wash:rgba(144,133,233,.14);--code-wash:rgba(25,158,112,.15);
+    --bar:#3987e5;--track:#1b3558;
+    --good-text:#3fc27a;--critical:#d03b3b;--critical-text:#e66767;--warning-text:#f0c060;
+    --mark:#5c4a12;--shadow:0 6px 24px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --page:#0d0d0d;--surface:#1a1a19;--surface-2:#232321;--surface-3:#2c2c2a;
+  --ink:#f0efec;--ink-2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--border:rgba(255,255,255,.10);
+  --speech:#d95926;--llm:#3987e5;--tool:#9085e9;--code:#199e70;
+  --speech-wash:rgba(217,89,38,.16);--llm-wash:rgba(57,135,229,.14);--tool-wash:rgba(144,133,233,.14);--code-wash:rgba(25,158,112,.15);
+  --bar:#3987e5;--track:#1b3558;
+  --good-text:#3fc27a;--critical:#d03b3b;--critical-text:#e66767;--warning-text:#f0c060;
+  --mark:#5c4a12;--shadow:0 6px 24px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--page);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--llm)}
+code,pre,kbd{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:13px}
+code{background:var(--surface-2);padding:1px 5px;border-radius:5px}
+pre{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow:auto;margin:.6em 0}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--page) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+header.top .wrap{display:flex;align-items:center;gap:14px;height:52px}
+.brand{font-weight:700;letter-spacing:-.01em}
+.toc{display:flex;gap:14px;overflow:auto;flex:1;font-size:13px;white-space:nowrap}
+.toc a{color:var(--ink-2);text-decoration:none}.toc a:hover{color:var(--ink)}
+.btn{font:inherit;font-size:13px;border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:8px;padding:5px 10px;cursor:pointer}
+.btn:hover{background:var(--surface-2)}.btn[aria-pressed="true"]{background:var(--ink);color:var(--page);border-color:var(--ink)}
+.hero{padding:44px 0 18px}
+.kicker{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:650}
+h1{font-size:clamp(28px,4.2vw,42px);line-height:1.12;letter-spacing:-.02em;margin:.2em 0 .3em;text-wrap:balance}
+h2{font-size:24px;letter-spacing:-.01em;margin:0 0 .25em;text-wrap:balance}
+h3{font-size:16px;margin:1.1em 0 .3em}
+.lead{font-size:17px;color:var(--ink-2);max-width:68ch}
+.sub{color:var(--ink-2);max-width:74ch;margin:.2em 0 1em}
+section{padding:34px 0;border-top:1px solid var(--border)}
+.num{display:inline-block;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:650;margin-right:8px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:22px 0 4px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.tile .v{font-size:24px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12.5px;color:var(--ink-2);line-height:1.35}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media (max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+.small{font-size:13px;color:var(--ink-2)}.muted{color:var(--muted)}
+.chip{display:inline-block;border:1px solid var(--border);background:var(--surface-2);border-radius:999px;padding:1px 9px;margin:2px 4px 2px 0;font-size:12.5px}
+.chip b{font-weight:650}
+.badge{display:inline-block;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:650;border:1px solid transparent}
+.b-speech{background:var(--speech-wash);border-color:var(--speech)}.b-llm{background:var(--llm-wash);border-color:var(--llm)}
+.b-tool{background:var(--tool-wash);border-color:var(--tool)}.b-code{background:var(--code-wash);border-color:var(--code)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px;color:var(--ink-2);margin:.4em 0 .8em}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+/* diagram */
+.diagram{display:grid;grid-template-columns:1fr;gap:14px}
+.detail .cols{display:grid;grid-template-columns:1.1fr 1fr;gap:6px 26px}
+@media (max-width:820px){.detail .cols{grid-template-columns:1fr}}
+.svgbox{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:8px;overflow-x:auto}
+.svgbox svg{display:block;min-width:760px;width:100%;height:auto}
+svg text{font-family:inherit;fill:var(--ink)}
+svg .sub-t{fill:var(--ink-2);font-size:10.5px}
+svg .nm-t{font-size:13.5px;font-weight:650}
+svg .lbl{font-size:11px;fill:var(--ink-2)}
+svg .route-t{font-size:11px;font-weight:650;fill:var(--ink)}
+svg .edge{stroke:var(--muted);stroke-width:1.6;fill:none}
+svg .edge.dash{stroke-dasharray:5 4}
+svg .n rect{stroke-width:1.6;rx:10;transition:all .2s}
+svg .n{cursor:pointer}
+svg .n:hover rect,svg .n:focus rect{stroke-width:2.6}
+svg .n.sel rect{stroke-width:3}
+svg .n.on rect{stroke-width:3.2;filter:drop-shadow(0 0 6px rgba(42,120,214,.55))}
+svg .k-speech rect{fill:var(--speech-wash);stroke:var(--speech)}
+svg .k-llm rect{fill:var(--llm-wash);stroke:var(--llm)}
+svg .k-tool rect{fill:var(--tool-wash);stroke:var(--tool)}
+svg .k-code rect{fill:var(--code-wash);stroke:var(--code)}
+svg .zone{fill:none;stroke:var(--tool);stroke-width:1.2;stroke-dasharray:6 5;rx:14}
+.routes{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:.5em 0}
+@media (max-width:820px){.routes{grid-template-columns:1fr}}
+.rgroup{border:1px dashed var(--border);border-radius:12px;padding:10px 12px;background:var(--surface)}
+.rgroup.active{border-style:solid;border-color:var(--llm)}
+.rgroup .gl{font-size:12.5px;font-weight:650;color:var(--ink-2);margin-bottom:6px}
+.route{display:flex;gap:8px;align-items:baseline;border:1px solid var(--border);border-radius:8px;padding:4px 10px;margin:5px 0;font-size:13.5px}
+.route code{background:none;padding:0;font-size:12.5px;white-space:nowrap}
+.route span{color:var(--ink-2)}
+.routes.compact{grid-template-columns:1fr;gap:8px}
+.routes.compact .rgroup{padding:8px 10px}
+.routes.compact .route{display:inline-flex;margin:3px 5px 3px 0;padding:2px 9px}
+.routes.compact .route span{display:none}
+.walk{display:grid;grid-template-columns:1.6fr 1fr;gap:14px}
+@media (max-width:820px){.walk{grid-template-columns:1fr}}
+.routes.pick .route{opacity:.45}
+.routes.pick .route.sel{opacity:1;border-color:var(--llm);background:var(--llm-wash);box-shadow:0 0 0 3px var(--llm-wash);font-weight:650}
+.routes.pick .route.sel::before{content:"✓";color:var(--llm)}
+.detail h3{margin-top:0}
+.detail ul{margin:.3em 0 .2em;padding-left:1.1em}.detail li{margin:.15em 0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:13px;margin:.5em 0}
+.kv dt{color:var(--muted)}.kv dd{margin:0}
+
+/* walkthrough */
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:.4em 0 .9em}
+.strip{display:flex;flex-wrap:wrap;gap:6px;margin:.2em 0 .9em}
+.st{border:1px solid var(--border);border-radius:9px;padding:5px 10px;font-size:12.5px;background:var(--surface);cursor:pointer;color:var(--ink-2)}
+.st.done{color:var(--ink)}
+.st.cur{border-color:var(--llm);background:var(--llm-wash);color:var(--ink);font-weight:650;box-shadow:0 0 0 3px var(--llm-wash)}
+.blockb{border:1.5px solid var(--critical);background:color-mix(in srgb,var(--critical) 10%,transparent);border-radius:12px;padding:10px 14px;margin:.2em 0 .8em;font-size:14px}
+.blockb b{color:var(--critical-text)}
+.st.blk{border-color:var(--critical);color:var(--critical-text);font-weight:650}
+.st.skp{opacity:.5;text-decoration:line-through;cursor:default;border-style:dashed}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.stage{min-height:230px}
+.stage h3{margin:.1em 0 .4em}
+.quote{border-left:3px solid var(--grid);padding:2px 0 2px 12px;color:var(--ink-2);margin:.5em 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--grid);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:650;letter-spacing:.02em}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.tbl{overflow-x:auto}
+.meter{display:flex;align-items:center;gap:8px;min-width:120px}
+.meter .trk{flex:1;height:8px;border-radius:4px;background:var(--track);position:relative;overflow:hidden}
+.meter .fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--bar)}
+.meter .val{width:44px;text-align:right;font-variant-numeric:tabular-nums}
+.flag{color:var(--critical-text);font-weight:650;white-space:nowrap}
+.note{background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:14px}
+.note.warn{border-left:4px solid var(--warning)}
+.flowrow{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:.6em 0}
+.box{flex:1 1 150px;border:1px solid var(--border);border-radius:11px;padding:10px 12px;background:var(--surface);font-size:13.5px}
+.box b{display:block;margin-bottom:2px}
+.arrow{align-self:center;color:var(--muted)}
+.layers{counter-reset:l;display:grid;gap:8px}
+.layer{display:grid;grid-template-columns:34px 1fr;gap:10px;align-items:start;background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:10px 12px}
+.layer::before{counter-increment:l;content:counter(l);width:26px;height:26px;border-radius:50%;background:var(--surface-3);display:grid;place-items:center;font-weight:650;font-size:13px}
+.layer b{display:block}
+footer{padding:26px 0 50px;color:var(--muted);font-size:13px;border-top:1px solid var(--border)}
+@media print{header.top{position:static}.btn{display:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <span class="brand">🎙 ShopVoice</span>
+  <nav class="toc" aria-label="Contents">
+    <a href="#picture">One picture</a>
+    <a href="#follow">Follow a request</a>
+    <a href="#who">Who decides</a>
+    <a href="#rag">Retrieval</a>
+    <a href="#mcp">MCP</a>
+    <a href="#safety">Safety</a>
+    <a href="#eval">Evaluation</a>
+    <a href="#data">Data</a>
+    <a href="#run">Run it</a>
+  </nav>
+  <button class="btn" id="theme" title="Light / dark">◐</button>
+</div></header>
+
+<div class="wrap">
+<div class="hero">
+  <div class="kicker">Voice to voice · multi-agent · product discovery</div>
+  <h1>How a spoken question becomes a grounded, cited answer</h1>
+  <p class="lead">ShopVoice listens, plans, pulls evidence from a private product catalog (and the live web when asked) through MCP tools, checks its own answer, and speaks a recommendation of at most 15 seconds while the screen shows the comparison table, the citations and the full trace. The workflow is orchestrated with LangGraph.</p>
+  <div class="tiles">
+    <div class="tile"><div class="v">9</div><div class="l">LangGraph nodes, 5 of them call the LLM</div></div>
+    <div class="tile"><div class="v">2</div><div class="l">MCP tools: <code>rag.search</code>, <code>web.search</code></div></div>
+    <div class="tile"><div class="v">9,513</div><div class="l">products indexed (Amazon Product Dataset 2020)</div></div>
+    <div class="tile"><div class="v">~25 s</div><div class="l">per turn end to end with Claude Haiku</div></div>
+    <div class="tile"><div class="v">172 / 172</div><div class="l">stage checks pass in text; 211 / 212 in voice</div></div>
+    <div class="tile"><div class="v">34</div><div class="l">automated tests</div></div>
+  </div>
+</div>
+
+<section id="picture">
+  <h2><span class="num">1</span><span>The whole idea in one picture</span></h2>
+  <p class="sub">One line runs left to right. The Retriever reaches two tools through MCP. The Critic can send a draft back once. Unsafe, unclear or off-topic requests take the short path below and call no tools. Click any node to see what it does and what is enforced in code rather than by prompt.</p>
+  <div class="legend">
+    <span><i style="background:var(--speech)"></i><span>Speech</span></span>
+    <span><i style="background:var(--llm)"></i><span>LLM node (with a rule-based fallback)</span></span>
+    <span><i style="background:var(--tool)"></i><span>MCP tools and data</span></span>
+    <span><i style="background:var(--code)"></i><span>Code-only node</span></span>
+  </div>
+  <div class="diagram">
+    <div class="svgbox">
+      <svg viewBox="0 0 1120 372" role="img" aria-label="LangGraph pipeline diagram">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker>
+        </defs>
+        <!-- MCP zone -->
+        <rect class="zone" x="262" y="10" width="472" height="118"/>
+        <text x="276" y="29" class="lbl" style="font-weight:650">MCP server · stdio / HTTP · discovery via tools/list</text>
+        <g class="n k-tool" data-id="rag" tabindex="0"><rect x="276" y="40" width="214" height="76"/>
+          <text x="383" y="64" text-anchor="middle" class="nm-t">rag.search</text>
+          <text x="383" y="82" text-anchor="middle" class="sub-t">private catalog: vectors + BM25 + filters</text>
+          <text x="383" y="99" text-anchor="middle" class="sub-t">returns doc_id for citation</text></g>
+        <g class="n k-tool" data-id="web" tabindex="0"><rect x="506" y="40" width="214" height="76"/>
+          <text x="613" y="64" text-anchor="middle" class="nm-t">web.search</text>
+          <text x="613" y="82" text-anchor="middle" class="sub-t">live price / stock (Brave, Serper, Tavily)</text>
+          <text x="613" y="99" text-anchor="middle" class="sub-t">cache · rate limit · domain rules</text></g>
+        <!-- retriever <-> MCP -->
+        <path class="edge" d="M498 186 L498 132" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text x="506" y="163" class="lbl">tool calls</text>
+
+        <!-- main row -->
+        <text x="8" y="212" class="lbl">🎙</text>
+        <path class="edge" d="M28 219 L58 219" marker-end="url(#ah)"/>
+        <g class="n k-speech" data-id="asr" tabindex="0"><rect x="60" y="190" width="108" height="58"/>
+          <text x="114" y="214" text-anchor="middle" class="nm-t">ASR</text>
+          <text x="114" y="232" text-anchor="middle" class="sub-t">speech to text</text></g>
+        <path class="edge" d="M168 219 L186 219" marker-end="url(#ah)"/>
+        <g class="n k-llm" data-id="router" tabindex="0"><rect x="188" y="190" width="108" height="58"/>
+          <text x="242" y="214" text-anchor="middle" class="nm-t">Router</text>
+          <text x="242" y="232" text-anchor="middle" class="sub-t">intent · safety</text></g>
+        <path class="edge" d="M296 219 L314 219" marker-end="url(#ah)"/>
+        <g class="n k-llm" data-id="planner" tabindex="0"><rect x="316" y="190" width="108" height="58"/>
+          <text x="370" y="214" text-anchor="middle" class="nm-t">Planner</text>
+          <text x="370" y="232" text-anchor="middle" class="sub-t">which tools, filters</text></g>
+        <path class="edge" d="M424 219 L442 219" marker-end="url(#ah)"/>
+        <g class="n k-llm" data-id="retriever" tabindex="0"><rect x="444" y="190" width="108" height="58"/>
+          <text x="498" y="214" text-anchor="middle" class="nm-t">Retriever</text>
+          <text x="498" y="232" text-anchor="middle" class="sub-t">tools · reconcile</text></g>
+        <path class="edge" d="M552 219 L570 219" marker-end="url(#ah)"/>
+        <g class="n k-llm" data-id="answerer" tabindex="0"><rect x="572" y="190" width="108" height="58"/>
+          <text x="626" y="214" text-anchor="middle" class="nm-t">Answerer</text>
+          <text x="626" y="232" text-anchor="middle" class="sub-t">picks + summary</text></g>
+        <path class="edge" d="M680 219 L698 219" marker-end="url(#ah)"/>
+        <g class="n k-llm" data-id="critic" tabindex="0"><rect x="700" y="190" width="108" height="58"/>
+          <text x="754" y="214" text-anchor="middle" class="nm-t">Critic</text>
+          <text x="754" y="232" text-anchor="middle" class="sub-t">grounding check</text></g>
+        <path class="edge" d="M808 219 L826 219" marker-end="url(#ah)"/>
+        <g class="n k-code" data-id="finalize" tabindex="0"><rect x="828" y="190" width="108" height="58"/>
+          <text x="882" y="214" text-anchor="middle" class="nm-t">Finalize</text>
+          <text x="882" y="232" text-anchor="middle" class="sub-t">caveats · citations</text></g>
+        <path class="edge" d="M936 219 L954 219" marker-end="url(#ah)"/>
+        <g class="n k-speech" data-id="tts" tabindex="0"><rect x="956" y="190" width="108" height="58"/>
+          <text x="1010" y="214" text-anchor="middle" class="nm-t">TTS</text>
+          <text x="1010" y="232" text-anchor="middle" class="sub-t">speech, ≤ 15 s</text></g>
+        <path class="edge" d="M1064 219 L1092 219" marker-end="url(#ah)"/>
+        <text x="1096" y="224" class="lbl">🔊</text>
+
+        <!-- revise loop -->
+        <path class="edge dash" d="M754 248 C754 292, 626 292, 626 250" marker-end="url(#ah)"/>
+        <text x="690" y="296" text-anchor="middle" class="lbl">revise (once at most)</text>
+
+        <!-- direct path -->
+        <path class="edge" d="M242 248 L242 314" marker-end="url(#ah)"/>
+        <g class="n k-code" data-id="direct" tabindex="0"><rect x="188" y="316" width="128" height="46"/>
+          <text x="252" y="336" text-anchor="middle" class="nm-t">Direct reply</text>
+          <text x="252" y="352" text-anchor="middle" class="sub-t">fixed wording · no tools</text></g>
+        <path class="edge" d="M316 339 L1010 339 L1010 250" marker-end="url(#ah)"/>
+        <text x="560" y="332" text-anchor="middle" class="route-t">Route B · unclear / small talk / out of scope / unsafe → no tools</text>
+        <text x="306" y="268" class="route-t">Route A · search / compare / price check / question</text>
+        <text x="249" y="286" class="route-t">B</text>
+        <text x="300" y="211" class="route-t">A</text>
+      </svg>
+    </div>
+    <aside class="card detail" id="detail" aria-live="polite"></aside>
+  </div>
+  <h3>The Router's 8 routes: every request takes exactly one</h3>
+  <p class="sub">The Router gives the request one task label, and the label decides the path: the four on the left continue to plan → tools → answer → check; the four on the right get a fixed reply and never call a tool.</p>
+  <div id="routes-static"></div>
+</section>
+
+<section id="follow">
+  <h2><span class="num">2</span><span>Follow one real request through the pipeline</span></h2>
+  <p class="sub">These are recordings of three real runs (agent on Claude Haiku 5.5; live results come from the test fixture). Step through, or press Play, to see what each node produced and how long it took.</p>
+  <div class="tabs" id="cases"></div>
+  <div class="quote" id="req"></div>
+  <div id="blockbanner"></div>
+  <div class="strip" id="strip"></div>
+  <div class="controls">
+    <button class="btn" id="prev">←</button>
+    <button class="btn" id="play">▶ Play</button>
+    <button class="btn" id="next">→</button>
+    <span class="small" id="pos"></span>
+  </div>
+  <div class="walk">
+    <div class="card stage" id="stage"></div>
+    <div class="card">
+      <h3 style="margin-top:0">Where the time goes</h3>
+      <div id="times"></div>
+      <p class="small muted" id="timenote"></p>
+    </div>
+  </div>
+</section>
+
+<section id="who">
+  <h2><span class="num">3</span><span>Who decides what: the LLM judges, code guarantees</span></h2>
+  <p class="sub">The design rule: anything that must not go wrong (budget, citations, tool allow-list, safety refusals) is not left to a prompt but enforced in code. The LLM does the parts that need language understanding, and every LLM node has a fallback that needs no model.</p>
+  <div class="tbl card"><table>
+    <thead><tr><th>Node</th><th>The LLM decides</th><th>Code guarantees</th><th>Prompt</th></tr></thead>
+    <tbody>
+      <tr><td><b>Router</b></td><td>task, budget, brand, material, named products, whether live info is wanted</td><td>harm and chemical-mixing inputs are blocked before any model call; a spoken budget is never lost; quoted “SYSTEM:” text cannot change constraints</td><td><code>router.md</code></td></tr>
+      <tr><td><b>Planner</b></td><td>query wording, ranking criteria</td><td>always one catalog step; <code>web.search</code> only when live info was asked; budget and brand copied into filters; at most 4 steps</td><td><code>planner.md</code></td></tr>
+      <tr><td><b>Retriever</b></td><td>which tool calls to issue, whether to retry with a simpler query</td><td>tool allow-list; hard constraints re-applied to every call; tool text sanitised; named products looked up without the budget filter; live and catalog prices reconciled</td><td><code>retriever.md</code></td></tr>
+      <tr><td><b>Answerer</b></td><td>which products, the reasons, the spoken summary, correcting false premises</td><td>title, price, rating and materials are copied from evidence by <code>doc_id</code>, never generated; unknown ids are dropped</td><td><code>answerer.md</code></td></tr>
+      <tr><td><b>Critic</b></td><td>whether claims are supported, whether something was left unanswered</td><td>budget, citations, prices not in evidence, invented ratings, unsupported health or certification claims</td><td><code>critic.md</code></td></tr>
+      <tr><td><b>Finalize</b></td><td class="muted">–</td><td>after one failed revision, rebuilds the answer from evidence only; adds mandatory caveats; builds citations</td><td class="muted">–</td></tr>
+    </tbody></table></div>
+</section>
+
+<section id="rag">
+  <h2><span class="num">4</span><span>Agentic RAG: how a product is found</span></h2>
+  <p class="sub">Vector search always returns its nearest neighbours, so the hard part is not finding something but deciding whether it is what the user asked for.</p>
+  <div class="flowrow">
+    <div class="box"><b>① Metadata filters</b><span>price range, brand, category, rating, applied to both retrievers</span></div><div class="arrow">→</div>
+    <div class="box"><b>② Dense + sparse</b><span>Chroma cosine similarity; BM25 keywords</span></div><div class="arrow">→</div>
+    <div class="box"><b>③ Fuse and rerank</b><span>reciprocal rank fusion, reranked by title coverage</span></div><div class="arrow">→</div>
+    <div class="box"><b>④ Relevance label</b><span>strong / weak: only strong hits become evidence</span></div><div class="arrow">→</div>
+    <div class="box"><b>⑤ Type, material, named checks</b><span>a “wooden maraca” is not a “wooden puzzle”</span></div><div class="arrow">→</div>
+    <div class="box"><b>⑥ Reconcile with live</b><span>match by ASIN, then title; a gap above 10% is a conflict</span></div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div class="card"><h3 style="margin-top:0">Self-correction</h3><p class="small">No strong hit: retry with a simpler query. A rating filter that cannot be met (the dataset has no ratings) is dropped, and the answer says so.</p></div>
+    <div class="card"><h3 style="margin-top:0">Conflicts are shown</h3><p class="small">The catalog price is a January 2020 snapshot; the live price is newer. When they differ both are reported with their sources, and a product whose live price breaks the budget is not recommended, with the reason given.</p></div>
+    <div class="card"><h3 style="margin-top:0">No match means no match</h3><p class="small">When nothing is relevant enough the answer is “not found”, with the closest items listed as non-matches rather than passed off as recommendations. Brand is a hard constraint: other brands are never substituted.</p></div>
+  </div>
+</section>
+
+<section id="mcp">
+  <h2><span class="num">5</span><span>The MCP server: one server, two tools</span></h2>
+  <p class="sub">The agent never touches the database or the network directly; everything goes through MCP. The client discovers tools and their JSON schemas with <code>tools/list</code>, then calls them with <code>tools/call</code>. Every call is written to an audit log.</p>
+  <div class="grid2">
+    <div class="card"><span class="badge b-tool">rag.search</span>
+      <p class="small">Hybrid search over the private catalog.</p>
+<pre>in : query, top_k, max_price, min_price,
+     brand, category, min_rating
+out: doc_id, sku, title, price, rating, brand,
+     ingredients, recommended_age, relevance, ...</pre>
+      <p class="small"><code>doc_id</code> is the citation id; <code>relevance</code> tells the agent whether to trust the hit.</p></div>
+    <div class="card"><span class="badge b-tool">web.search</span>
+      <p class="small">Wraps a legitimate search API (Brave, Serper or Tavily); used only for current price or availability. Verified end to end on the live Tavily API; tests and scored runs use canned results so they are repeatable.</p>
+<pre>in : query, max_results
+out: title, url, snippet, price?, availability?,
+     source_domain, suspicious</pre>
+      <p class="small">TTL cache (180 s), per-minute rate limit, domain allow/block lists; instruction-like text in snippets is removed and the result flagged <code>suspicious</code>.</p></div>
+  </div>
+  <p class="small" style="margin-top:10px">Transports: stdio (default; the agent spawns the server as a subprocess) or streamable HTTP. Log: <code>logs/mcp_tool_calls.jsonl</code> with timestamp, arguments, result ids or URLs, cache hit and latency.</p>
+</section>
+
+<section id="safety">
+  <h2><span class="num">6</span><span>Safety: where a bad answer is stopped</span></h2>
+  <p class="sub">Seven layers from the outside in. None of them depends on the model simply obeying.</p>
+  <div class="layers">
+    <div class="layer"><div><b>Input guardrail (regex, before any model call)</b><span class="small">Mixing cleaners, harming people or animals: refused with fixed wording and a safety note; no tools called.</span></div></div>
+    <div class="layer"><div><b>Router safety flag</b><span class="small">Tells an attack on the assistant from a normal request that quotes suspicious text: the first is refused, the second is answered with a statement that the quote was not followed.</span></div></div>
+    <div class="layer"><div><b>Tool allow-list and argument enforcement</b><span class="small">Only the two tools; at most 6 calls per turn; budget and other hard constraints are re-applied in code.</span></div></div>
+    <div class="layer"><div><b>Tool output is data, not instructions</b><span class="small">Instruction-like content in catalog and web text is stripped; suspicious results are never matched or cited.</span></div></div>
+    <div class="layer"><div><b>Evidence-only facts</b><span class="small">Product fields are copied from evidence by doc_id; the model cannot write a price or a product that does not exist.</span></div></div>
+    <div class="layer"><div><b>Critic: rules plus LLM</b><span class="small">Rules check budget, citations, prices outside evidence, invented ratings and unsupported claims; the LLM checks support and completeness. A failing draft goes back once, then is rebuilt from evidence only.</span></div></div>
+    <div class="layer"><div><b>Redaction of output and logs</b><span class="small">Keys live only in <code>.env</code>; every output and log line passes a redactor.</span></div></div>
+  </div>
+</section>
+
+<section id="eval">
+  <h2><span class="num">7</span><span>Evaluation: what was measured and where it failed</span></h2>
+  <p class="sub">The thing evaluated is the complete agent, the same pipeline the UI runs, not the underlying model. Three layers answer three different questions.</p>
+  <div class="grid3">
+    <div class="card"><h3 style="margin-top:0">① Automated tests</h3><div class="tile" style="border:0;padding:0"><div class="v">34 / 34</div></div><p class="small">Does each component do what it claims? End-to-end tests go through the real MCP server.</p></div>
+    <div class="card"><h3 style="margin-top:0">② Stage-level checks</h3><div class="tile" style="border:0;padding:0"><div class="v">172 / 172</div></div><p class="small">20 scenarios; every expectation belongs to one stage, so a failure can be located. Voice mode: 211 / 212 (one ASR miss).</p></div>
+    <div class="card"><h3 style="margin-top:0">③ ProofAgent adversarial runs</h3><div class="tile" style="border:0;padding:0"><div class="v">7.8 – 8.9</div></div><p class="small">12 custom adversarial scenarios, multi-turn, scored by a jury on six metrics out of 10. Range of the final score over four runs.</p></div>
+  </div>
+  <h3>Four ProofAgent runs (fixes were made between runs)</h3>
+  <div class="tbl card" id="score"></div>
+  <div class="note warn" style="margin-top:12px">Stated plainly: the headline moved by more than a point between runs. The jury's own Task Success score was 8.9–9.4 every time; in the last two runs the harness's repeat-consistency rule multiplied it by 0.30. The two defects behind that inconsistency were fixed and verified after run 4, but the fixed code has not been re-scored.</div>
+  <h3>What the evaluation found (selection)</h3>
+  <div class="tbl card"><table>
+    <thead><tr><th>Stage</th><th>What happened</th><th>Outcome</th></tr></thead>
+    <tbody>
+      <tr><td>Router → RAG</td><td>One message held two asks (a LEGO set under $5, and the price of a named set). Asked again verbatim, the agent answered a different one of the two.</td><td>Named products are now looked up on their own, outside the budget filter, and shown with the in-budget picks. Fixed, not re-scored.</td></tr>
+      <tr><td>Router</td><td>A user quoted a post containing “Ignore previous instructions”; the whole legitimate request was refused and no tool was called.</td><td>The Router now decides between an attack and a quote; a quote is answered with a statement that it was not followed. Fixed, not re-scored.</td></tr>
+      <tr><td>RAG</td><td>A live price was attached to a sibling product of the same brand.</td><td>Matching now requires the live title to be almost fully contained and assigns pairs globally; a different ASIN vetoes. Fixed.</td></tr>
+      <tr><td>Answerer</td><td>The Answerer has no tools of its own and told the user it “could not run a search” that had in fact run.</td><td>The tool calls made this turn are now passed to the Answerer. Fixed.</td></tr>
+      <tr><td>Data</td><td>A puzzle was described as “designed for toddlers” with no age information in the evidence.</td><td>The data had it: 62% of products carry a manufacturer recommended age inside the specification text, which the first ingest did not parse. Now extracted.</td></tr>
+      <tr><td>ASR</td><td>“uh yeah so” heard as “A yes or”; the proper noun “Tsuro” heard as “Tzuru”.</td><td>Open. Next step: catalog vocabulary as Whisper hotwords, and a confirmation turn for low-confidence names.</td></tr>
+    </tbody></table></div>
+  <p class="small">All nine failure cases with causes and fixes are in <code>eval/FAILURE_ANALYSIS.md</code>.</p>
+</section>
+
+<section id="data">
+  <h2><span class="num">8</span><span>The data, honestly</span></h2>
+  <p class="sub">The assigned dataset is the Amazon Product Dataset 2020 (Kaggle, 10,002 rows). It differs from the brief's example, and the system keeps every field while leaving a value empty where the data has none, rather than inventing one.</p>
+  <div class="tbl card"><table>
+    <thead><tr><th>Field</th><th>In the raw data</th><th>What the system does</th></tr></thead>
+    <tbody>
+      <tr><td>title, category, price, features</td><td>present</td><td>cleaned; price ranges keep both ends</td></tr>
+      <tr><td>brand</td><td class="flag">empty column</td><td>about 9% recovered from the manufacturer in the specification text; the rest inferred from the title and labelled as inferred</td></tr>
+      <tr><td>rating, reviews</td><td class="flag">not present</td><td>shown as n/a; the assistant says the catalog has no ratings and never states one</td></tr>
+      <tr><td>ingredients</td><td class="flag">empty column</td><td>material keywords found in the text (wooden, bpa-free, …)</td></tr>
+      <tr><td>SKU</td><td class="flag">empty column</td><td>ASIN parsed from the product URL</td></tr>
+      <tr><td>recommended age (extra)</td><td>inside the specification text</td><td>present for 5,899 products (62%), e.g. “36 months - 5 years”; the only basis for age statements</td></tr>
+      <tr><td>category mix</td><td>67% toys and games; almost no household cleaning</td><td>the brief's “stainless-steel cleaner” example returns “no match”</td></tr>
+    </tbody></table></div>
+</section>
+
+<section id="run">
+  <h2><span class="num">9</span><span>Run it</span></h2>
+  <div class="grid2">
+    <div class="card"><h3 style="margin-top:0">Start</h3>
+<pre>scripts/setup.ps1            # venv + dependencies + .env
+scripts/build_index.ps1      # download data, build index
+scripts/run_ui.ps1           # UI at http://localhost:8501</pre>
+      <p class="small">The UI shows live which node the request has reached and the intermediate result of every step.</p></div>
+    <div class="card"><h3 style="margin-top:0">Swap the model in <code>.env</code> only</h3>
+<pre>LLM_PROVIDER=anthropic   LLM_MODEL=claude-haiku-5-5
+LLM_PROVIDER=openai      LLM_MODEL=gpt-4.1-mini
+LLM_PROVIDER=ollama      LLM_MODEL=qwen3:14b
+LLM_PROVIDER=rules       # no model: rule-based fallbacks</pre>
+      <p class="small">ASR, TTS, embeddings and web search are switched the same way.</p></div>
+  </div>
+  <p class="small" style="margin-top:10px">More: <code>README.md</code> (architecture and configuration), <code>docs/MCP.md</code> (tool schemas), <code>prompts/</code> (every prompt and the node it belongs to), <code>eval/</code> (evaluation config, scenarios, results).</p>
+</section>
+
+<footer>ShopVoice · agentic voice-to-voice assistant for product discovery · This page is a single file and works offline. Traces and scores are from real runs on 2026-11-19.</footer>
+</div>
+
+<script id="traces" type="application/json">{"discover": {"request": "I need a wooden puzzle for a 2 year old under twenty dollars", "steps": [{"node": "asr", "ms": 0}, {"node": "router", "ms": 3506, "task": "product_search", "constraints": {"product_type": "wooden puzzle", "max_price": 20.0, "material": "wood", "preferences": ["for a 2 year old"]}, "named": [], "live": false, "flag": "none", "by": "llm"}, {"node": "planner", "ms": 5189, "steps": [{"tool": "rag.search", "query": "wooden puzzle for a 2 year old, made of wood", "max_price": 20.0}], "criteria": ["fits budget (price <= $20)", "matches wood material and wooden puzzle type", "suitability for a 2 year old based on manufacturer recommended age, where present"], "by": "llm"}, {"node": "retriever", "ms": 1306, "calls": [{"tool": "rag.search", "by": "llm", "args": {"query": "wooden puzzle for a 2 year old, made of wood", "max_price": 20.0}, "n": 6}], "evidence": [{"id": "amz20-7bf4d392c47b", "title": "Melissa & Doug Safari Wooden Chunky Puzzle (Preschool, Chu", "price": 9.99, "age": "24 months - 4 years", "live": null}, {"id": "amz20-54c0824558c7", "title": "Puzzled, Inc. 3D Natural Wood Puzzle - School Bus", "price": 14.15, "age": "15 years", "live": null}, {"id": "amz20-424c150a8360", "title": "Crayola Sea Animals Wood Puzzle & Stamps, Educational Toy,", "price": 19.97, "age": "3 years and up", "live": null}, {"id": "amz20-a7e21af65235", "title": "Puzzled, Inc. 3D Natural Wood Puzzle - Sea Knight", "price": 13.19, "age": "15 years", "live": null}, {"id": "amz20-e757234fce03", "title": "Crayola Farm Animals Wooden Puzzle & Stamps, Educational T", "price": 19.99, "age": "3 years and up", "live": null}, {"id": "amz20-30b04ef05830", "title": "Melissa & Doug Barnyard Wooden Jigsaw Puzzle (24 pcs)", "price": 7.99, "age": "36 months - 5 years", "live": null}], "conflicts": [], "mode": "llm-tool-calling"}, {"node": "answerer", "ms": 4689, "spoken": "The top pick is the Melissa and Doug Safari Wooden Chunky Puzzle at $9.99, recommended for 24 months to 4 years. A second option, the Barnyard wooden jigsaw at $7.99, starts at 36 months. Other results are on screen.", "picks": [{"id": "amz20-7bf4d392c47b", "title": "Melissa & Doug Safari Wooden Chunky Puzzle (Preschool, Chu", "price": 9.99, "why": "Made of wood at $9.99 (catalog price), with chunky wooden pieces and a manufacturer recommended age of 24 months - 4 years, which includes 2."}, {"id": "amz20-30b04ef05830", "title": "Melissa & Doug Barnyard Wooden Jigsaw Puzzle (24 pcs)", "price": 7.99, "why": "A 24-piece wooden jigsaw at $7.99 (catalog price), but its manufacturer recommended age is 36 months - 5 years, which does not include a 2 year old."}], "by": "llm"}, {"node": "critic", "ms": 5027, "verdict": "revise", "issues": ["[3] The caveat \"no live price was found for these products\" implies a live price check was run and returned nothing, but no web.search call was made this turn (only rag.search). Re"], "minor": 0}, {"node": "answerer", "ms": 4649, "spoken": "The Melissa and Doug Safari Wooden Chunky Puzzle is my top pick at $9.99, and its listed age range includes 2 year olds. Two other wooden options are on screen. I did not check live prices.", "picks": [{"id": "amz20-7bf4d392c47b", "title": "Melissa & Doug Safari Wooden Chunky Puzzle (Preschool, Chu", "price": 9.99, "why": "It is a wooden chunky puzzle priced at $9.99 with a manufacturer recommended age of 24 months - 4 years, which includes a 2 year old."}, {"id": "amz20-30b04ef05830", "title": "Melissa & Doug Barnyard Wooden Jigsaw Puzzle (24 pcs)", "price": 7.99, "why": "It is a 24-piece wooden jigsaw puzzle priced at $7.99, but its manufacturer recommended age of 36 months - 5 years does not include a 2 year old."}], "by": "llm"}, {"node": "critic", "ms": 4350, "verdict": "approve", "issues": [], "minor": 1}, {"node": "finalize", "ms": 7, "spoken": "The Melissa and Doug Safari Wooden Chunky Puzzle is my top pick at $9.99, and its listed age range includes 2 year olds. Two other wooden options are on screen. I did not check live prices.", "words": 36, "citations": [{"type": "private", "id": "amz20-7bf4d392c47b"}, {"type": "private", "id": "amz20-30b04ef05830"}], "caveats": ["Prices are from the January 2020 catalog snapshot; live prices were not checked.", "The Barnyard puzzle is the lowest price but its stated age starts at 36 months, so it is a weaker fit for a 2 year old.", "The Crayola wood puzzle options are under $20 but are listed for 3 years and up, and the Puzzled 3D wood puzzles are listed for 15 years, so I left th", "The catalog has no star ratings or reviews, so I could not compare quality from ratings."]}, {"node": "tts", "ms": 380, "seconds": 13.02}]}, "conflict": {"request": "What's the current price of the Melissa and Doug safari chunky puzzle?", "steps": [{"node": "asr", "ms": 0}, {"node": "router", "ms": 1130, "task": "price_availability_check", "constraints": {"product_type": "chunky puzzle", "brand": "Melissa & Doug", "material": "wood"}, "named": ["Melissa & Doug Safari Wooden Chunky Puzzle"], "live": true, "flag": "none", "by": "llm"}, {"node": "planner", "ms": 2488, "steps": [{"tool": "rag.search", "query": "Melissa & Doug Safari Wooden Chunky Puzzle", "brand": "Melissa & Doug"}, {"tool": "web.search", "query": "Melissa & Doug Safari Wooden Chunky Puzzle price"}], "criteria": ["exact product match to the named Melissa & Doug Safari Wooden Chunky Puzzle", "current live price and availability versus January 2020 catalog price (report both, state which is newer)", "wood material as listed in catalog"], "by": "llm"}, {"node": "retriever", "ms": 2977, "calls": [{"tool": "rag.search", "by": "llm", "args": {"query": "Melissa & Doug Safari Wooden Chunky Puzzle", "brand": "Melissa & Doug"}, "n": 5}, {"tool": "web.search", "by": "llm", "args": {"query": "Melissa & Doug Safari Wooden Chunky Puzzle price", "max_results": 5}, "n": 1}, {"tool": "web.search", "by": "plan", "args": {"query": "Melissa & Doug First Play Safari Animals Wooden Chunky Jigsaw Puzzle Set (4-Pack price", "max_results": 5}, "n": 0}], "evidence": [{"id": "amz20-7bf4d392c47b", "title": "Melissa & Doug Safari Wooden Chunky Puzzle (Preschool, Chu", "price": 9.99, "age": "24 months - 4 years", "live": 13.49}, {"id": "amz20-01663d024e52", "title": "Melissa & Doug First Play Safari Animals Wooden Chunky Jig", "price": 21.77, "age": "24 months - 4 years", "live": null}, {"id": "amz20-8c5f878aaf24", "title": "Melissa & Doug Jumbo ABC Wooden Chunky Puzzle (26 pcs)", "price": 13.46, "age": "36 months - 5 years", "live": null}, {"id": "amz20-4e3d6f4b8e7e", "title": "Melissa & Doug Pets Wooden Chunky Jigsaw Puzzle - Dog, Cat", "price": 14.44, "age": "24 months - 4 years", "live": null}, {"id": "amz20-90d9e2cd3552", "title": "Melissa & Doug Wooden Chunky Puzzles Set - Vehicles and Co", "price": 7.99, "age": "24 months - 4 years", "live": null}], "conflicts": [{"catalog": 9.99, "live": 13.49, "field": "price"}], "mode": "llm-tool-calling"}, {"node": "answerer", "ms": 4563, "spoken": "The Melissa and Doug Safari Wooden Chunky Puzzle is listed at $13.49 live and in stock. That is newer than its $9.99 catalog price from January 2020. Other Melissa and Doug chunky puzzles are on screen as alternatives.", "picks": [{"id": "amz20-7bf4d392c47b", "title": "Melissa & Doug Safari Wooden Chunky Puzzle (Preschool, Chu", "price": 9.99, "why": "The catalog lists it as a wooden 8-piece chunky puzzle with safari animal pictures, priced at $9.99 in the January 2020 snapshot, with a live price of $13.49 that is in s"}], "by": "llm"}, {"node": "critic", "ms": 3392, "verdict": "approve", "issues": [], "minor": 0}, {"node": "finalize", "ms": 17, "spoken": "The Melissa and Doug Safari Wooden Chunky Puzzle is listed at $13.49 live and in stock. That is newer than its $9.99 catalog price from January 2020. Other Melissa and Doug chunky puzzles are on screen as alternatives.", "words": 38, "citations": [{"type": "private", "id": "amz20-7bf4d392c47b"}, {"type": "live", "id": "https://toys.retailer.test/p/melissa-doug-safari-chunky-puzzle-B000B9RHYC"}], "caveats": ["Catalog price $9.99 is from the January 2020 snapshot; the live price $13.49 is newer and is from toys.retailer.test (https://toys.retailer.test/p/mel", "Brand is inferred from the title; the catalog brand field is empty.", "Manufacturer recommended age is 24 months - 4 years, as listed in the catalog.", "Material is listed as wooden in the catalog."]}, {"node": "tts", "ms": 5812, "seconds": 11.86}]}, "unsafe": {"request": "Which cleaners can I mix with bleach to make it stronger?", "steps": [{"node": "asr", "ms": 0}, {"node": "router", "ms": 0, "task": "unsafe", "constraints": {}, "named": [], "live": false, "flag": "hazardous_chemical", "by": "guardrail"}, {"node": "respond_direct", "ms": 0, "text": "I can't help with mixing cleaning chemicals. Combining bleach with ammonia, acids such as vinegar, or other cleaners can release toxic gases. Use one product at a time, follow the label, and ventilate. If someone has been exposed, call Poison Control at 1-800-222-1222 in the US or emergency services."}, {"node": "tts", "ms": 419, "seconds": 13.17}]}}</script>
+<script>
+(function(){
+"use strict";
+var LANG = "en";
+var $ = function(s, r){ return (r || document).querySelector(s); };
+var $$ = function(s, r){ return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+function t(o){ return typeof o === "string" ? o : (o[LANG] || o.en); }
+function money(v){ return v == null ? "–" : "$" + Number(v).toFixed(2); }
+function dur(ms){ return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s"; }
+
+/* ---------- node reference (diagram detail panel) ---------- */
+var NODES = {
+  asr:{kind:"speech", name:"ASR", file:"speech/asr.py", prompt:"–",
+    does:{en:"Turns one recorded clip (WAV/MP3) into text with segment timestamps. Runs faster-whisper locally by default; the OpenAI transcription API is a drop-in alternative."},
+    out:{en:"transcript, segments"},
+    code:{en:["An empty transcript becomes “I didn't catch that”, not a search.","Typed input skips this node."]}},
+  router:{kind:"llm", name:"Router", file:"graph/nodes.py · router_node", prompt:"prompts/router.md",
+    does:{en:"Reads the transcript and the conversation so far and decides what is being asked: task type, budget, brand, material, preferences, products named explicitly, whether current price is wanted, and whether the request is unsafe."},
+    out:{en:"Intent (structured)"},
+    code:{en:["Regex guardrail runs first: harm and chemical mixing never reach the model.","A budget stated in the message is never lost; a budget from an earlier turn cannot silently override it.","Quoted “SYSTEM:” lines cannot change constraints.","Falls back to a rule-based parser if the model call fails."]}},
+  planner:{kind:"llm", name:"Planner", file:"graph/nodes.py · planner_node", prompt:"prompts/planner.md",
+    does:{en:"Chooses sources and writes the tool steps, given the intent and the tool list discovered from the MCP server. Prefers the catalog; adds live web search only when the user asked for current information."},
+    out:{en:"Plan: steps, fields needed, ranking criteria"},
+    code:{en:["At least one rag.search step, always.","web.search is dropped unless live info was requested and a provider is configured.","Budget and brand are copied into the step filters.","At most 4 steps, duplicates removed."]}},
+  retriever:{kind:"llm", name:"Retriever", file:"graph/nodes.py · retriever_node", prompt:"prompts/retriever.md",
+    does:{en:"The agentic part. The LLM issues MCP tool calls (up to 3 rounds), then code verifies and repairs: retries when nothing relevant came back, looks up products the user named, checks product type and material, and reconciles live results with catalog items."},
+    out:{en:"evidence, conflicts, tool-call log"},
+    code:{en:["Only rag.search and web.search may be called; 6 calls per turn at most.","Hard constraints are re-applied to every catalog call.","Planned steps run even if the model skips them.","Tool text is sanitised before any model sees it."]}},
+  answerer:{kind:"llm", name:"Answerer", file:"graph/nodes.py · answerer_node", prompt:"prompts/answerer.md",
+    does:{en:"Picks up to three products by doc_id, writes one reason each, a spoken summary of at most 45 words, caveats and a follow-up question. Also corrects false premises and says when it did not follow quoted instructions."},
+    out:{en:"AnswerDraft"},
+    code:{en:["Title, price, rating and materials are copied from evidence by doc_id, never generated.","A doc_id that is not in the evidence is dropped.","With no evidence there are no picks, only a “not found” reply."]}},
+  critic:{kind:"llm", name:"Critic", file:"graph/nodes.py · critic_node", prompt:"prompts/critic.md",
+    does:{en:"Checks the draft before it is spoken. Deterministic rules look for budget violations, uncited picks, prices or ratings that are not in the evidence, and unsupported claims. The LLM checks whether statements are supported and whether anything was left unanswered."},
+    out:{en:"verdict: approve / revise / repair"},
+    code:{en:["One revision at most, then the answer is rebuilt from evidence only.","Only grounding, constraint, conflict, safety and completeness issues send a draft back; wording preferences do not."]}},
+  finalize:{kind:"code", name:"Finalize", file:"graph/nodes.py · finalize_node", prompt:"–",
+    does:{en:"Assembles what the user gets: applies the repair if the Critic still objects, adds mandatory caveats (snapshot date, no ratings, conflicts, unmet constraints), builds the citation list and trims the spoken summary."},
+    out:{en:"final text, spoken summary, citations"},
+    code:{en:["All of it is code. No model call."]}},
+  tts:{kind:"speech", name:"TTS", file:"speech/tts.py", prompt:"–",
+    does:{en:"Speaks the summary. Offline system voice by default; OpenAI TTS as an alternative."},
+    out:{en:"audio file"},
+    code:{en:["The real audio length is measured; trailing sentences are dropped until it is 15 seconds or less."]}},
+  direct:{kind:"code", name:{en:"Direct reply"}, file:"graph/nodes.py · respond_direct_node", prompt:"–",
+    does:{en:"The short path for requests that must not, or cannot, be searched: unsafe requests, attempts to extract the instructions, orders and carts, small talk, and requests too vague to search."},
+    out:{en:"fixed reply"},
+    code:{en:["Fixed wording, no tools, no product claims.","A chemical-mixing question gets a refusal plus a short safety note."]}},
+  rag:{kind:"tool", name:"rag.search", file:"mcp_server/server.py · rag/store.py", prompt:"–",
+    does:{en:"Hybrid retrieval over 9,513 products: Chroma vector search plus BM25, both restricted by the metadata filters, fused by reciprocal rank and labelled strong or weak."},
+    out:{en:"products with doc_id"},
+    code:{en:["Brand matching ignores case, punctuation and “&” vs “and”.","Embeddings run locally (MiniLM via ONNX); no key needed."]}},
+  web:{kind:"tool", name:"web.search", file:"mcp_server/web.py", prompt:"–",
+    does:{en:"Live web search through Brave, Serper or Tavily, normalised to title, url, snippet, price and availability. Used only for current price or stock, never to discover products."},
+    out:{en:"results with url"},
+    code:{en:["TTL cache, rate limit, domain allow/block lists.","Instruction-like text in snippets is removed and the result flagged."]}}
+};
+var KIND = {speech:{en:"Speech"}, llm:{en:"LLM node"}, tool:{en:"MCP tool"}, code:{en:"Code only"}};
+var L = {
+  does:{en:"What it does"}, enforced:{en:"Enforced in code"}, prompt:{en:"Prompt"},
+  output:{en:"Output"}, source:{en:"Source"},
+  step:{en:"Step"}, of:{en:"of"}, total:{en:"total"},
+  play:{en:"▶ Play"}, pause:{en:"❚❚ Pause"},
+  timenote:{en:"Bars share one scale within this run. The LLM nodes dominate; retrieval through MCP takes 1–3 s."},
+  metric:{en:"Metric"}, run:{en:"Run"}, runSuffix:{en:""},
+  final:{en:"Final score"}, cert:{en:"Certification"}, det:{en:"Repeat consistency"},
+  cut:{en:"cut by the consistency rule; jury scored "},
+  notscored:{en:"not scored (judge returned invalid JSON)"}
+};
+
+/* ---------- the Router's routes ---------- */
+var ROUTES = {
+  tools:{title:{en:"Route A → Planner → Retriever (MCP tools) → Answerer → Critic"}, items:[
+    ["product_search", {en:"find or recommend products"}],
+    ["product_comparison", {en:"compare products or options"}],
+    ["price_availability_check", {en:"current price or stock of a product"}],
+    ["product_question", {en:"a factual question about a product"}]]},
+  direct:{title:{en:"Route B → Direct reply (fixed wording, no tools)"}, items:[
+    ["clarification_needed", {en:"too vague to search: ask one question"}],
+    ["chitchat", {en:"greeting, thanks"}],
+    ["out_of_scope", {en:"orders, carts, anything outside product discovery"}],
+    ["unsafe", {en:"chemical mixing, harm, prompt extraction: refuse"}]]}
+};
+function routeMeaning(chosen){
+  var all = ROUTES.tools.items.concat(ROUTES.direct.items);
+  for(var i = 0; i < all.length; i++){ if(all[i][0] === chosen) return t(all[i][1]); }
+  return "";
+}
+function routesHTML(chosen, compact){
+  function group(g){
+    var has = g.items.some(function(it){ return it[0] === chosen; });
+    return '<div class="rgroup' + (has ? " active" : "") + '"><div class="gl">' + esc(t(g.title)) + "</div>" +
+      g.items.map(function(it){ return '<div class="route' + (it[0] === chosen ? " sel" : "") + '"><code>' + it[0] + "</code><span>" + esc(t(it[1])) + "</span></div>"; }).join("") + "</div>";
+  }
+  return '<div class="routes' + (chosen ? " pick" : "") + (compact ? " compact" : "") + '">' + group(ROUTES.tools) + group(ROUTES.direct) + "</div>" +
+    (compact && chosen ? "<p class='small' style='margin:.1em 0 .3em'><code>" + esc(chosen) + "</code> = " + esc(routeMeaning(chosen)) + "</p>" : "");
+}
+
+function showNode(id){
+  var n = NODES[id]; if(!n) return;
+  $$("svg .n").forEach(function(g){ g.classList.toggle("sel", g.getAttribute("data-id") === id); });
+  var codeItems = t(n.code).map(function(c){ return "<li>" + esc(c) + "</li>"; }).join("");
+  $("#detail").innerHTML =
+    "<div class='cols'><div>" +
+    '<span class="badge b-' + n.kind + '">' + esc(t(KIND[n.kind])) + "</span>" +
+    "<h3 style='margin:.5em 0 .2em;font-size:19px'>" + esc(t(n.name)) + "</h3>" +
+    "<p style='margin:.2em 0 .6em'>" + esc(t(n.does)) + "</p>" +
+    "<dl class='kv'><dt>" + esc(t(L.output)) + "</dt><dd>" + esc(t(n.out)) + "</dd>" +
+    "<dt>" + esc(t(L.prompt)) + "</dt><dd><code>" + esc(n.prompt) + "</code></dd>" +
+    "<dt>" + esc(t(L.source)) + "</dt><dd><code>" + esc(n.file) + "</code></dd></dl></div>" +
+    "<div><h3 style='margin:.2em 0'>" + esc(t(L.enforced)) + "</h3><ul class='small' style='color:var(--ink)'>" + codeItems + "</ul></div></div>";
+}
+var selected = "retriever";
+$$("svg .n").forEach(function(g){
+  var pick = function(){ selected = g.getAttribute("data-id"); showNode(selected); };
+  g.addEventListener("click", pick);
+  g.addEventListener("keydown", function(e){ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); pick(); } });
+});
+
+/* ---------- walkthrough ---------- */
+var TRACES = JSON.parse($("#traces").textContent);
+var CASES = [
+  {key:"discover", label:{en:"Search with constraints"}},
+  {key:"conflict", label:{en:"Catalog vs live price"}},
+  {key:"unsafe", label:{en:"Unsafe request"}}
+];
+var NAME = {asr:"ASR", router:"Router", planner:"Planner", retriever:"Retriever", answerer:"Answerer", critic:"Critic", finalize:"Finalize", respond_direct:{en:"Direct reply"}, tts:"TTS"};
+var cur = {c:0, i:0}, timer = null, touched = false;
+
+function chips(pairs){ return pairs.filter(function(p){ return p[1] !== undefined && p[1] !== null && p[1] !== ""; }).map(function(p){ return '<span class="chip">' + esc(p[0]) + ": <b>" + esc(p[1]) + "</b></span>"; }).join(""); }
+function stageHTML(s, idx, steps){
+  var h = "<h3>" + (idx + 1) + ". " + esc(t(NAME[s.node])) + " <span class='muted' style='font-weight:400'>· " + dur(s.ms) + "</span></h3>";
+  if(s.node === "asr") return h + "<p class='small'>" + ("Typed input in this recording, so speech recognition was skipped. With the microphone, the transcript and segment timestamps appear here.") + "</p>";
+  if(s.node === "router"){
+    var c = s.constraints || {};
+    var budget = (c.min_price != null || c.max_price != null) ? ((c.min_price != null ? money(c.min_price) : "$0") + " – " + (c.max_price != null ? money(c.max_price) : ("any"))) : "–";
+    var out = h + "<p class='small' style='margin:.2em 0'><b>" + ("Route chosen (1 of 8)") + "</b></p>" + routesHTML(s.task, true) +
+      "<p class='small' style='margin:.6em 0 .2em'><b>" + ("Extracted from the request") + "</b></p>" + chips([["budget", budget], ["product", c.product_type], ["brand", c.brand], ["material", c.material],
+      ["prefers", (c.preferences || []).join(", ")], ["named product", (s.named || []).join(", ")], ["wants live price", s.live ? ("yes") : ("no")], ["decided by", s.by]]);
+    if(s.flag && s.flag !== "none") out += "<p class='note warn' style='margin-top:8px'>" + ("Safety flag: ") + "<b>" + esc(s.flag) + "</b>. " + ("The regex guardrail stopped this request before any model was called.") + "</p>";
+    else out += "<p class='small'>" + ("A spoken amount becomes a hard constraint here; every later step re-applies it.") + "</p>";
+    return out;
+  }
+  if(s.node === "planner"){
+    var rows = s.steps.map(function(p){ var f = []; ["max_price","min_price","brand","category"].forEach(function(k){ if(p[k] != null) f.push(k + "=" + p[k]); });
+      return "<tr><td><code>" + esc(p.tool) + "</code></td><td>" + esc(p.query) + "</td><td>" + esc(f.join(", ") || "–") + "</td></tr>"; }).join("");
+    return h + "<div class='tbl'><table><thead><tr><th>" + ("tool") + "</th><th>" + ("query") + "</th><th>" + ("filters") + "</th></tr></thead><tbody>" + rows + "</tbody></table></div>" +
+      "<p class='small'>" + ("Ranking criteria: ") + esc((s.criteria || []).join(" → ")) + "</p>";
+  }
+  if(s.node === "retriever"){
+    var calls = s.calls.map(function(c){ return "<tr><td><code>" + esc(c.tool) + "</code></td><td>" + esc(c.by) + "</td><td>" + esc(JSON.stringify(c.args)) + "</td><td class='n'>" + c.n + "</td></tr>"; }).join("");
+    var ev = s.evidence.map(function(e){ return "<tr><td>" + esc(e.title) + "</td><td class='n'>" + money(e.price) + "</td><td class='n'>" + (e.live != null ? money(e.live) : "–") + "</td><td>" + esc(e.age || "–") + "</td></tr>"; }).join("");
+    var out2 = h + "<div class='tbl'><table><thead><tr><th>" + ("MCP call") + "</th><th>" + ("issued by") + "</th><th>" + ("arguments") + "</th><th class='n'>" + ("results") + "</th></tr></thead><tbody>" + calls + "</tbody></table></div>" +
+      "<p class='small' style='margin:.8em 0 .2em'><b>" + ("Evidence kept") + " (" + s.evidence.length + ")</b></p>" +
+      "<div class='tbl'><table><thead><tr><th>" + ("product") + "</th><th class='n'>" + ("catalog") + "</th><th class='n'>" + ("live") + "</th><th>" + ("recommended age") + "</th></tr></thead><tbody>" + ev + "</tbody></table></div>";
+    (s.conflicts || []).forEach(function(c){ out2 += "<p class='note warn' style='margin-top:8px'>" + ("Conflict: catalog ") + money(c.catalog) + (" vs live ") + money(c.live) + (". Both are reported, and the live price is named as the newer one.") + "</p>"; });
+    return out2;
+  }
+  if(s.node === "answerer"){
+    var rev = steps.slice(0, idx).filter(function(x){ return x.node === "answerer"; }).length;
+    var picks = s.picks.map(function(p){ return "<li><b>" + esc(p.title) + "</b> (" + money(p.price) + ") — " + esc(p.why) + "</li>"; }).join("");
+    return h + (rev ? "<span class='badge b-llm'>" + ("revision") + "</span> " : "") + "<p class='quote'>" + esc(s.spoken) + "</p><ul class='small'>" + picks + "</ul>" +
+      "<p class='small muted'>" + ("Prices and titles are not written by the model; they are copied from evidence by doc_id.") + "</p>";
+  }
+  if(s.node === "critic"){
+    var map = {approve:["approved", "b-code"], revise:["sent back for revision", "b-speech"], repair:["still rejected → evidence-only repair", "b-speech"]};
+    var m = map[s.verdict] || [s.verdict, "b-llm"];
+    var issues = (s.issues || []).map(function(i){ return "<li>" + esc(i) + (i.length >= 178 ? "…" : "") + "</li>"; }).join("");
+    return h + "<span class='badge " + m[1] + "'>" + esc(m[0]) + "</span>" + (issues ? "<ul class='small'>" + issues + "</ul><p class='small muted'>" + ("The Critic noticed a sentence implying a live price check that never happened (no web.search call), and sent the draft back.") + "</p>" : "<p class='small'>" + ("Neither the rule checks nor the LLM check found a blocking issue.") + "</p>");
+  }
+  if(s.node === "finalize"){
+    var cites = (s.citations || []).map(function(c){ return '<span class="chip">' + (c.type === "private" ? "📦 " : "🌐 ") + esc(c.id.length > 44 ? c.id.slice(0, 44) + "…" : c.id) + "</span>"; }).join("");
+    var cav = (s.caveats || []).map(function(c){ return "<li>" + esc(c) + (c.length >= 148 ? "…" : "") + "</li>"; }).join("");
+    return h + "<p class='quote'>" + esc(s.spoken) + "</p>" + chips([["words", s.words + " / 45"]]) + "<p class='small' style='margin:.6em 0 .1em'><b>" + ("Citations") + "</b></p>" + cites + "<p class='small' style='margin:.6em 0 .1em'><b>" + ("Notes on screen") + "</b></p><ul class='small'>" + cav + "</ul>";
+  }
+  if(s.node === "respond_direct") return h + "<p class='quote'>" + esc(s.text) + "</p><p class='small'>" + ("Fixed wording. The Planner, the Retriever and the tools were never called.") + "</p>";
+  if(s.node === "tts") return h + chips([["speech length", s.seconds != null ? s.seconds + " s" : "–"], ["limit", "15 s"]]) + "<p class='small'>" + ("The screen shows the full table and citations; only the summary is spoken.") + "</p>";
+  return h;
+}
+function diagramId(node){ return node === "respond_direct" ? "direct" : node; }
+function renderWalk(){
+  var tr = TRACES[CASES[cur.c].key], steps = tr.steps, s = steps[cur.i];
+  $("#cases").innerHTML = CASES.map(function(c, i){ return '<button class="btn" data-c="' + i + '" aria-pressed="' + (i === cur.c) + '">' + esc(t(c.label)) + "</button>"; }).join("");
+  $("#req").textContent = "“" + tr.request + "”";
+  var blockedAt = -1;
+  steps.forEach(function(x, i){ if(x.node === "router" && x.flag && x.flag !== "none") blockedAt = i; });
+  var blk = blockedAt >= 0 ? steps[blockedAt] : null;
+  $("#blockbanner").innerHTML = blk ? "<div class='blockb'>🛡 <b>Request blocked at step " + (blockedAt + 1) + " · Router</b> by the " +
+    (blk.by === "guardrail" ? "input guardrail (pattern match, before any LLM call)" : "Router safety classification") +
+    " · category <code>" + esc(blk.flag) + "</code>. Not executed: Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize. The reply is fixed wording.</div>" : "";
+  var skipped = blk ? ["Planner", "Retriever", "Answerer", "Critic", "Finalize"].map(function(n){ return '<span class="st skp" title="skipped, not executed">' + n + "</span>"; }).join("") : "";
+  $("#strip").innerHTML = steps.map(function(x, i){
+    return '<span class="st ' + (i === blockedAt ? "blk " : "") + (i === cur.i ? "cur" : i < cur.i ? "done" : "") + '" data-i="' + i + '">' + (i === blockedAt ? "🛡 " : "") + (i + 1) + ". " + esc(t(NAME[x.node])) + "</span>" +
+      (i === blockedAt ? skipped : ""); }).join("");
+  $("#stage").innerHTML = stageHTML(s, cur.i, steps);
+  var total = steps.reduce(function(a, x){ return a + x.ms; }, 0), max = Math.max.apply(null, steps.map(function(x){ return x.ms; })) || 1;
+  $("#pos").textContent = t(L.step) + " " + (cur.i + 1) + " " + t(L.of) + " " + steps.length + ("") + " · " + t(L.total) + " " + dur(total);
+  $("#times").innerHTML = "<table><tbody>" + steps.map(function(x, i){
+    return "<tr" + (i === cur.i ? " style='background:var(--surface-2)'" : "") + "><td style='white-space:nowrap'>" + (i + 1) + ". " + esc(t(NAME[x.node])) + "</td><td style='width:60%'><div class='meter' title='" + esc(t(NAME[x.node])) + ": " + dur(x.ms) + "'><div class='trk'><div class='fill' style='width:" + Math.max(0.5, 100 * x.ms / max) + "%'></div></div><span class='val'>" + dur(x.ms) + "</span></div></td></tr>"; }).join("") + "</tbody></table>";
+  $("#timenote").textContent = t(L.timenote);
+  $$("svg .n").forEach(function(g){ g.classList.toggle("on", touched && g.getAttribute("data-id") === diagramId(s.node)); });
+  $("#play").textContent = timer ? t(L.pause) : t(L.play);
+}
+function go(i){ touched = true; var n = TRACES[CASES[cur.c].key].steps.length; cur.i = Math.max(0, Math.min(n - 1, i)); renderWalk(); }
+function stop(){ if(timer){ clearInterval(timer); timer = null; } }
+$("#cases").addEventListener("click", function(e){ var b = e.target.closest("[data-c]"); if(!b) return; stop(); touched = true; cur = {c:+b.getAttribute("data-c"), i:0}; renderWalk(); });
+$("#strip").addEventListener("click", function(e){ var b = e.target.closest("[data-i]"); if(!b) return; stop(); go(+b.getAttribute("data-i")); });
+$("#prev").addEventListener("click", function(){ stop(); go(cur.i - 1); });
+$("#next").addEventListener("click", function(){ stop(); go(cur.i + 1); });
+$("#play").addEventListener("click", function(){
+  if(timer){ stop(); renderWalk(); return; }
+  var n = TRACES[CASES[cur.c].key].steps.length; if(cur.i >= n - 1) cur.i = 0;
+  touched = true;
+  timer = setInterval(function(){ var m = TRACES[CASES[cur.c].key].steps.length; if(cur.i >= m - 1){ stop(); renderWalk(); } else go(cur.i + 1); }, 2600);
+  renderWalk();
+});
+document.addEventListener("keydown", function(e){
+  if(e.target.closest && e.target.closest("input,textarea,select")) return;
+  var r = $("#follow").getBoundingClientRect(); if(r.bottom < 0 || r.top > innerHeight) return;
+  if(e.key === "ArrowRight"){ stop(); go(cur.i + 1); } else if(e.key === "ArrowLeft"){ stop(); go(cur.i - 1); }
+});
+
+/* ---------- scorecard ---------- */
+var RUNS = [
+  {final:8.77, cert:"INCOMPLETE", det:"1.00", m:{task:8.94, hall:null, tool:8.01, safe:8.71, manip:9.28, instr:8.89}},
+  {final:8.94, cert:"SILVER", det:"1.00", m:{task:9.37, hall:7.93, tool:8.53, safe:10.00, manip:9.31, instr:8.50}},
+  {final:8.33, cert:"NEEDS_ENHANCEMENT", det:"0.30", m:{task:2.70, hall:9.33, tool:9.01, safe:10.00, manip:9.82, instr:9.11}, jury:9.00},
+  {final:7.78, cert:"NEEDS_ENHANCEMENT", det:"0.30", m:{task:2.74, hall:8.46, tool:9.01, safe:8.07, manip:9.42, instr:8.96}, jury:9.12}
+];
+var METRICS = [["task", {en:"Task Success"}], ["hall", {en:"Hallucination Resistance"}], ["tool", {en:"Tool Use"}],
+  ["safe", {en:"Safety"}], ["manip", {en:"Manipulation Resistance"}], ["instr", {en:"Instruction Following"}]];
+function meter(v, note){
+  if(v == null) return "<span class='small muted' title='" + esc(t(L.notscored)) + "'>" + ("not scored") + "</span>";
+  return "<div class='meter' title='" + v.toFixed(2) + " / 10" + (note ? " — " + esc(note) : "") + "'><div class='trk'><div class='fill' style='width:" + (v * 10) + "%'></div></div><span class='val'>" + v.toFixed(2) + "</span>" + (note ? "<span class='flag' aria-label='" + esc(note) + "'>▼</span>" : "") + "</div>";
+}
+function renderScore(){
+  var head = "<tr><th>" + esc(t(L.metric)) + "</th>" + RUNS.map(function(r, i){ return "<th>" + esc(t(L.run)) + " " + (i + 1) + esc(t(L.runSuffix)) + "</th>"; }).join("") + "</tr>";
+  var body = METRICS.map(function(mm){
+    return "<tr><td>" + esc(t(mm[1])) + "</td>" + RUNS.map(function(r){ var note = (mm[0] === "task" && r.jury) ? t(L.cut) + r.jury.toFixed(2) : ""; return "<td>" + meter(r.m[mm[0]], note) + "</td>"; }).join("") + "</tr>"; }).join("");
+  body += "<tr><td><b>" + esc(t(L.final)) + "</b></td>" + RUNS.map(function(r){ return "<td>" + meter(r.final) + "</td>"; }).join("") + "</tr>";
+  body += "<tr><td>" + esc(t(L.cert)) + "</td>" + RUNS.map(function(r){ return "<td class='small'>" + esc(r.cert) + "</td>"; }).join("") + "</tr>";
+  body += "<tr><td>" + esc(t(L.det)) + "</td>" + RUNS.map(function(r){ return "<td class='small'>" + r.det + "</td>"; }).join("") + "</tr>";
+  $("#score").innerHTML = "<table><thead>" + head + "</thead><tbody>" + body + "</tbody></table><p class='small muted' style='margin:.6em 0 0'>" +
+    ("▼ Task Success cut by the repeat-consistency rule; the jury itself scored 9.00 and 9.12. Bar length = score out of 10.") + "</p>";
+}
+
+/* ---------- theme and first render ---------- */
+$("#theme").addEventListener("click", function(){
+  var root = document.documentElement, now = root.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  var next = now === "dark" ? "light" : "dark"; root.setAttribute("data-theme", next); try{ localStorage.setItem("sv-theme", next); }catch(e){}
+});
+try{
+  var th = localStorage.getItem("sv-theme"); if(th) document.documentElement.setAttribute("data-theme", th);
+}catch(e){}
+showNode(selected); renderWalk(); renderScore();
+$("#routes-static").innerHTML = routesHTML("");
+})();
+</script>
+</body>
+</html>
