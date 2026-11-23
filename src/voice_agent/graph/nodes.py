@@ -14,6 +14,7 @@ import time
 from typing import Annotated, Any, TypedDict
 
 from ..config import get_settings
+from ..input_guard import log_record, scan_input
 from ..llm import call_structured, get_chat_model, llm_enabled, load_prompt, render
 from ..logging_utils import log_event
 from ..mcp_client import get_mcp_client, llm_tool_name
@@ -40,6 +41,8 @@ class AgentState(TypedDict, total=False):
     synthesize: bool
     # working state
     asr: dict
+    input_scan: dict
+    input_guard_stop: bool
     intent: dict
     direct_reply: str
     plan: dict
@@ -94,6 +97,66 @@ def asr_node(state: AgentState) -> dict:
     return {"transcript": result["text"], "asr": result,
             "steps": _step("asr", t0, f"transcribed {result.get('duration')} s of audio with {result['provider']}:{result['model']}",
                            text=result["text"], segments=result["segments"])}
+
+
+# ================================================================ Input guard (ProofAgent Nano)
+GUARD_BLOCK_REPLY = ("I can't help with that request: it was stopped by the input safety check before it reached the assistant. "
+                     "I can help you find and compare products from the catalog instead.")
+GUARD_REVIEW_REPLY = ("I can't continue with this request here: the input safety check held it for human review, "
+                      "so nothing further was run.")
+GUARD_ERROR_REPLY = ("The input safety check is unavailable right now, so I stopped before processing your request. "
+                     "Please try again in a moment.")
+SELF_HARM_NOTE = (" If you are thinking about hurting yourself, please reach out now: in the US call or text 988 "
+                  "(Suicide & Crisis Lifeline), or contact your local emergency number.")
+
+
+def input_guard_node(state: AgentState) -> dict:
+    """Scans the transcript (typed or from ASR) with ProofAgent Nano before the Router. On block / review, or a failed
+    scan with PROOFAGENT_GUARD_ON_ERROR=block, the graph goes straight to respond_direct: no Router, no LLM, no MCP tool."""
+    t0 = time.perf_counter()
+    transcript = state.get("transcript") or ""
+    g = scan_input(transcript)
+    if g.source != "disabled" or transcript.strip():
+        log_event("input_guard", log_record(g, transcript))
+    label = {"proofagent_nano": "ProofAgent Nano (live API)", "mock": "MOCKED ProofAgent response (test only)",
+             "disabled": "ProofAgent scan off", "error": "ProofAgent scan FAILED (no ProofAgent verdict)"}[g.source]
+    verdict = f"{g.action} -> {g.decision}" if g.action else g.decision
+    summary = f"{label}: {verdict}" + (f" ({g.top_risk})" if g.top_risk else "") + (f"; {g.error}" if g.error else "")
+    detail = {"scan": g.to_dict(), "source_label": label}
+    detail["scan"].pop("text", None)
+    out: dict[str, Any] = {"input_scan": detail["scan"]}
+
+    if g.decision in ("block", "review"):
+        if g.source == "error":
+            reply, category, mech = GUARD_ERROR_REPLY, "scan_unavailable", "ProofAgent scan failed (fail closed)"
+        else:
+            reply = GUARD_REVIEW_REPLY if g.decision == "review" else GUARD_BLOCK_REPLY
+            if any("self_harm" in r for r in [g.top_risk or "", *g.risks]):
+                reply += SELF_HARM_NOTE
+            category, mech = g.top_risk or g.action or g.decision, f"{label} · {g.action}"
+        flag = "prompt_injection" if (g.top_risk or "").startswith("6.") else "other"
+        intent = Intent(task="unsafe", safety_flag=flag, safety_reason=f"input guard: {verdict}")
+        out.update(intent=intent.model_dump(), direct_reply=reply, input_guard_stop=True)
+        out["steps"] = _step("input_guard", t0, summary, guard=[_guard(
+            "blocked", mech, (g.summary or g.note or g.error or "") + " The Router, the LLM and the MCP tools were not run.",
+            category)], **detail)
+        return out
+
+    guards = []
+    if g.masked:
+        out["transcript"] = g.text
+        guards.append(_guard("sanitised", f"{label} · {g.action}", "Personal data was replaced with placeholders "
+                             "before the Router; only the masked text goes on.", g.top_risk or "pii"))
+    elif g.source == "error":
+        guards.append(_guard("flagged", label, g.note, "scan_unavailable"))
+    elif g.note and g.source != "disabled":
+        guards.append(_guard("flagged", label, g.note, g.top_risk or g.action or ""))
+    out["steps"] = _step("input_guard", t0, summary, guard=guards, **detail)
+    return out
+
+
+def route_after_input_guard(state: AgentState) -> str:
+    return "respond_direct" if state.get("input_guard_stop") else "router"
 
 
 # ========================================================================= Router
