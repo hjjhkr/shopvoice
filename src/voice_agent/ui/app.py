@@ -40,6 +40,7 @@ EXAMPLES = [
 # node id -> (label, what it does)
 STAGES = {
     "asr": ("ASR", "speech to text"),
+    "input_guard": ("Input guard", "ProofAgent Nano scan, before the Router"),
     "router": ("Router", "intent, constraints, safety"),
     "planner": ("Planner", "which tools, which filters"),
     "retriever": ("Retriever", "MCP tool calls, reconcile"),
@@ -49,7 +50,7 @@ STAGES = {
     "respond_direct": ("Direct reply", "fixed wording, no tools"),
     "tts": ("TTS", "text to speech"),
 }
-MAIN = ["asr", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
+MAIN = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
 TOOL_PATH = ["planner", "retriever", "answerer", "critic", "finalize"]
 
 ROUTES_TOOLS = {
@@ -226,7 +227,7 @@ def node_status(events: list[tuple[str, dict]], running: str | None = None) -> d
         prev = status.get(node, {"ms": 0, "n": 0, "guards": []})
         gs = prev["guards"] + guards_of(update)
         state = "done"
-        if any(g["action"] == "blocked" for g in gs) and node == "router":
+        if any(g["action"] == "blocked" for g in gs) and node in ("router", "input_guard"):
             state = "block"
         elif any(g["action"] == "diverted" for g in gs):
             state = "divert"
@@ -236,7 +237,8 @@ def node_status(events: list[tuple[str, dict]], running: str | None = None) -> d
             state = "warn"
         status[node] = {"state": state, "ms": prev["ms"] + (step.get("ms") or 0), "n": prev["n"] + 1, "guards": gs}
     if "respond_direct" in status or (running == "respond_direct"):
-        for node in TOOL_PATH:                       # the tool path was bypassed
+        bypassed = TOOL_PATH + (["router"] if status.get("input_guard", {}).get("state") == "block" else [])
+        for node in bypassed:                        # the tool path (and, after an input-guard stop, the Router) was bypassed
             status.setdefault(node, {"state": "skip", "ms": None, "n": 0, "guards": []})
     if running:
         status[running] = {**status.get(running, {"ms": None, "n": 0, "guards": []}), "state": "run"}
@@ -247,7 +249,7 @@ def block_info(events: list[tuple[str, dict]]) -> dict | None:
     """The guard event that stopped or diverted the whole request, with the step that raised it."""
     for i, (node, update) in enumerate(events, 1):
         for g in guards_of(update):
-            if node == "router" and g["action"] in ("blocked", "diverted"):
+            if (node == "router" and g["action"] in ("blocked", "diverted")) or (node == "input_guard" and g["action"] == "blocked"):
                 return {**g, "step": i, "node": node}
     return None
 
@@ -295,12 +297,36 @@ def banner_html(info: dict | None) -> str:
                 f'<div class="h">Request blocked at step {info["step"]} · {label}</div>'
                 f'<div class="m">Blocked by <b>{esc(info["mechanism"])}</b>'
                 f'{" · category <code>" + esc(info["category"]) + "</code>" if info.get("category") else ""}. {esc(info["detail"])}</div>'
-                f'<div class="s">Not executed because of this block: Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize. '
+                f'<div class="s">Not executed because of this block: {"Router (no LLM call), " if info["node"] == "input_guard" else ""}'
+                f'Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize. '
                 f'The reply below is fixed wording.</div></div>')
     return (f'<div class="sv-banner divert"><div class="ic">↪</div>'
             f'<div class="h">Request diverted at step {info["step"]} · {label}</div>'
             f'<div class="m">Route <code>{esc(info.get("category") or "direct")}</code> · {esc(info["detail"])}</div>'
             f'<div class="s">Not executed: Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize.</div></div>')
+
+
+def input_guard_row(scan: dict, stopped: bool) -> tuple[str, str, str, str, str]:
+    """Checkpoint row for the ProofAgent Nano scan. Only a real API response is shown as a ProofAgent verdict."""
+    src, action, decision = scan.get("source"), scan.get("action"), scan.get("decision")
+    step = "1 · Input guard"
+    if src == "disabled":
+        return (step, "ProofAgent Nano input scan", "OFF", "skip",
+                f"{scan.get('note') or 'No scan was made.'} ShopVoice's own pattern guardrails still run in the Router.")
+    if src == "error":
+        return (step, "ProofAgent Nano input scan", "SCAN FAILED", "block" if stopped else "warn",
+                f"No ProofAgent verdict: {scan.get('error')}. {scan.get('note', '')}")
+    kind = {"pass": "ok", "mask": "warn", "review": "block", "block": "block"}.get(decision, "warn")
+    facts = [f"decision {decision}", f"severity {scan.get('severity')}"]
+    if scan.get("top_risk"):
+        facts.append(f"top risk {scan['top_risk']}")
+    if scan.get("request_id"):
+        facts.append(f"request {scan['request_id']}")
+    if scan.get("latency_ms") is not None:
+        facts.append(f"{scan['latency_ms']} ms")
+    name = "ProofAgent Nano input scan (live API)" if src == "proofagent_nano" else "MOCKED ProofAgent response (test only, not a real scan)"
+    return (step, name, f"{'MOCK ' if src == 'mock' else ''}{action}", kind,
+            " · ".join(facts) + (f". {scan['note']}" if scan.get("note") else ""))
 
 
 def checkpoints(events: list[tuple[str, dict]], result: dict) -> list[dict]:
@@ -320,27 +346,35 @@ def checkpoints(events: list[tuple[str, dict]], result: dict) -> list[dict]:
     def row(step: str, name: str, status: str, kind: str, detail: str) -> None:
         rows.append({"step": step, "name": name, "status": status, "kind": kind, "detail": detail})
 
-    if "router" not in ran:
+    guard_stop = any(g["action"] == "blocked" for g in by.get("input_guard", []))
+    if "input_guard" in ran:
+        row(*input_guard_row(result.get("input_scan") or {}, guard_stop))
+    if guard_stop:
+        for name in ("Input guardrail (patterns, before any LLM)", "Safety classification", "Scope check (route)"):
+            row("2 · Router", name, "NOT REACHED", "skip", "The ProofAgent input guard stopped the request before the Router.")
+        stopped = True
+    elif "router" not in ran:
         return rows
-    if input_block:
-        row("2 · Router", "Input guardrail (patterns, before any LLM)", "BLOCKED", "block",
-            f"Matched a {input_block['category']} pattern. {input_block['detail']}")
-    elif flagged:
-        row("2 · Router", "Input guardrail (patterns, before any LLM)", "FLAGGED", "warn", flagged["detail"])
     else:
-        row("2 · Router", "Input guardrail (patterns, before any LLM)", "PASSED", "ok", "No harm, chemical-mixing or injection pattern matched.")
-    if input_block:
-        row("2 · Router", "Safety classification", "NOT REACHED", "skip", "The input guardrail had already blocked the request.")
-    elif cls_block:
-        row("2 · Router", "Safety classification", "BLOCKED", "block", f"Category {cls_block['category']}. {cls_block['detail']}")
-    else:
-        row("2 · Router", "Safety classification", "PASSED", "ok", "Safety flag: none.")
-    if input_block or cls_block:
-        row("2 · Router", "Scope check (route)", "NOT REACHED", "skip", "Blocked before routing.")
-    elif diverted:
-        row("2 · Router", "Scope check (route)", "DIVERTED", "warn", f"Route {diverted['category']}. {diverted['detail']}")
-    else:
-        row("2 · Router", "Scope check (route)", "IN SCOPE", "ok", f"Route {(result.get('intent') or {}).get('task', '')}: continues to the tool path.")
+        if input_block:
+            row("2 · Router", "Input guardrail (patterns, before any LLM)", "BLOCKED", "block",
+                f"Matched a {input_block['category']} pattern. {input_block['detail']}")
+        elif flagged:
+            row("2 · Router", "Input guardrail (patterns, before any LLM)", "FLAGGED", "warn", flagged["detail"])
+        else:
+            row("2 · Router", "Input guardrail (patterns, before any LLM)", "PASSED", "ok", "No harm, chemical-mixing or injection pattern matched.")
+        if input_block:
+            row("2 · Router", "Safety classification", "NOT REACHED", "skip", "The input guardrail had already blocked the request.")
+        elif cls_block:
+            row("2 · Router", "Safety classification", "BLOCKED", "block", f"Category {cls_block['category']}. {cls_block['detail']}")
+        else:
+            row("2 · Router", "Safety classification", "PASSED", "ok", "Safety flag: none.")
+        if input_block or cls_block:
+            row("2 · Router", "Scope check (route)", "NOT REACHED", "skip", "Blocked before routing.")
+        elif diverted:
+            row("2 · Router", "Scope check (route)", "DIVERTED", "warn", f"Route {diverted['category']}. {diverted['detail']}")
+        else:
+            row("2 · Router", "Scope check (route)", "IN SCOPE", "ok", f"Route {(result.get('intent') or {}).get('task', '')}: continues to the tool path.")
 
     def later(step: str, node: str, name: str, actions: tuple, ok_text: str, ok_label: str = "PASSED") -> None:
         if stopped:
@@ -443,6 +477,26 @@ def card_asr(update, detail, state):
             st.dataframe(pd.DataFrame(asr["segments"]), hide_index=True, use_container_width=True)
     else:
         st.caption("Typed input: speech recognition was skipped.")
+
+
+def card_input_guard(update, detail, state):
+    scan = detail.get("scan") or {}
+    src = scan.get("source")
+    kind = {"proofagent_nano": "ok", "mock": "warn", "disabled": "info", "error": "bad"}.get(src, "info")
+    st.markdown(badge(detail.get("source_label", src or "?"), kind), unsafe_allow_html=True)
+    if src in ("proofagent_nano", "mock"):
+        st.markdown(" ".join([chip("ProofAgent action", scan.get("action")), chip("ShopVoice decision", scan.get("decision")),
+                              chip("severity", scan.get("severity")), chip("model", scan.get("model"))]), unsafe_allow_html=True)
+        if scan.get("risks"):
+            st.markdown(" ".join(chip("risk", r) for r in scan["risks"]), unsafe_allow_html=True)
+        if scan.get("summary"):
+            st.caption(scan["summary"])
+        st.caption(f"request id {scan.get('request_id') or 'n/a'} · HTTP {scan.get('http_status')} · {scan.get('latency_ms')} ms")
+    else:
+        st.caption(f"{scan.get('error') or ''} {scan.get('note') or ''}".strip()
+                   + " This is not a ProofAgent verdict.")
+    if scan.get("masked"):
+        st.caption("Personal data was masked: the Router received the text with placeholders.")
 
 
 def card_router(update, detail, state):
@@ -557,7 +611,7 @@ def card_tts(update, detail, state):
         st.caption("Speech synthesis was switched off for this request.")
 
 
-RENDERERS = {"asr": card_asr, "router": card_router, "planner": card_planner, "retriever": card_retriever,
+RENDERERS = {"asr": card_asr, "input_guard": card_input_guard, "router": card_router, "planner": card_planner, "retriever": card_retriever,
              "answerer": card_answerer, "critic": card_critic, "finalize": card_finalize,
              "respond_direct": card_direct, "tts": card_tts}
 
@@ -688,6 +742,9 @@ pills = [
     f'<span class="sv-pill"><i></i>TTS <b>{esc(settings.tts_provider)}</b></span>',
     f'<span class="sv-pill{"" if web_ok else " warn"}"><i></i>web.search <b>{esc(settings.web_provider)}</b></span>',
     f'<span class="sv-pill"><i></i>MCP <b>{esc(settings.mcp_transport)}</b></span>',
+    f'<span class="sv-pill{"" if settings.guard_mode == "on" and settings.nano_key else " warn"}"><i></i>ProofAgent input guard <b>'
+    + esc("on (Nano API)" if settings.guard_mode == "on" and settings.nano_key else
+          "on, NO KEY (scans fail)" if settings.guard_mode == "on" else "off") + "</b></span>",
 ]
 st.markdown(
     '<div class="sv-hero"><div style="display:flex;gap:14px;align-items:center"><div class="logo">🎙</div>'

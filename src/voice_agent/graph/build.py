@@ -1,8 +1,9 @@
 """LangGraph wiring.
 
-    START -> asr -> router -+-> planner -> retriever -> answerer -> critic -+-> finalize -> tts -> END
-                            |                              ^----- revise ---+
-                            +-> respond_direct (refuse / clarify / small talk) ---------> tts -> END
+    START -> asr -> input_guard -+-> router -+-> planner -> retriever -> answerer -> critic -+-> finalize -> tts -> END
+                                 |           |                              ^----- revise ---+
+                                 |           +-> respond_direct (refuse / clarify / small talk) --> tts -> END
+                                 +-> respond_direct (ProofAgent Nano block / review, or failed scan) -> tts -> END
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from . import nodes as n
 def build_graph():
     g = StateGraph(n.AgentState)
     g.add_node("asr", n.asr_node)
+    g.add_node("input_guard", n.input_guard_node)
     g.add_node("router", n.router_node)
     g.add_node("planner", n.planner_node)
     g.add_node("retriever", n.retriever_node)
@@ -27,7 +29,8 @@ def build_graph():
     g.add_node("tts", n.tts_node)
 
     g.add_edge(START, "asr")
-    g.add_edge("asr", "router")
+    g.add_edge("asr", "input_guard")
+    g.add_conditional_edges("input_guard", n.route_after_input_guard, {"router": "router", "respond_direct": "respond_direct"})
     g.add_conditional_edges("router", n.route_after_router, {"planner": "planner", "respond_direct": "respond_direct"})
     g.add_edge("planner", "retriever")
     g.add_edge("retriever", "answerer")

@@ -24,6 +24,7 @@ _SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),           # OpenAI / Anthropic style
     re.compile(r"\bBSA[A-Za-z0-9_\-]{20,}\b"),        # Brave
     re.compile(r"\btvly-[A-Za-z0-9_\-]{10,}"),        # Tavily
+    re.compile(r"\bpa_(?:nano|live|test)_[A-Za-z0-9]{16,}"),  # ProofAgent
     re.compile(r"\b[A-Fa-f0-9]{40,}\b"),              # long hex tokens (Serper etc.)
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}"),
 ]

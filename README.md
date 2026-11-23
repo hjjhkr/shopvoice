@@ -22,6 +22,7 @@ results. `python scripts/refresh_showcase.py` re-records the runs shown in it.
 | MCP server with two tools | `src/voice_agent/mcp_server/`, [docs/MCP.md](docs/MCP.md) |
 | UI (Streamlit) | `src/voice_agent/ui/app.py` |
 | ProofAgent evaluation | `eval/`, [eval/README.md](eval/README.md), [eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md) |
+| ProofAgent Nano runtime input guardrail (optional, `PROOFAGENT_GUARD=on`) | `src/voice_agent/input_guard.py`, [docs/INPUT_GUARD.md](docs/INPUT_GUARD.md) |
 | Prompt disclosure | [prompts/](prompts/README.md) |
 | Model-agnostic config | `.env.example`, `src/voice_agent/config.py`, `llm.py` |
 

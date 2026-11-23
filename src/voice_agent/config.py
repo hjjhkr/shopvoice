@@ -61,6 +61,13 @@ class Settings:
     # --- Logs / outputs ---
     log_dir: Path
     audio_dir: Path
+    # --- ProofAgent Nano runtime input guardrail (see docs/INPUT_GUARD.md) ---
+    guard_mode: str = "off"          # on | off
+    nano_url: str = "https://nano.proofagent.ai"
+    nano_key: str = ""
+    guard_timeout: float = 10.0
+    guard_on_error: str = "block"    # block (fail closed) | fallback (continue with ShopVoice's own guardrails only)
+    guard_mask_mode: str = "apply"   # apply (Router sees masked text) | observe (verdict logged, original text passed on)
 
 
 @lru_cache(maxsize=1)
@@ -92,6 +99,12 @@ def get_settings() -> Settings:
         mcp_url=_env("MCP_URL", "http://127.0.0.1:8765/mcp"),
         log_dir=_path("LOG_DIR", "logs"),
         audio_dir=_path("AUDIO_DIR", "logs/audio"),
+        guard_mode=_env("PROOFAGENT_GUARD", "off").lower(),
+        nano_url=_env("PROOFAGENT_NANO_URL", "https://nano.proofagent.ai").rstrip("/"),
+        nano_key=_env("PROOFAGENT_NANO_KEY") or _env("PROOFAGENT_NANO_API_KEY"),
+        guard_timeout=float(_env("PROOFAGENT_GUARD_TIMEOUT", "10")),
+        guard_on_error=_env("PROOFAGENT_GUARD_ON_ERROR", "block").lower(),
+        guard_mask_mode=_env("PROOFAGENT_GUARD_MASK", "apply").lower(),
     )
 
 
