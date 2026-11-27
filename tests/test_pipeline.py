@@ -7,6 +7,7 @@ import pytest
 
 os.environ["LLM_PROVIDER"] = "rules"
 os.environ["WEB_SEARCH_PROVIDER"] = "fixture"
+os.environ["PROOFAGENT_GUARD"] = "off"           # never call the live ProofAgent API from the test suite
 
 from voice_agent.config import reload_settings  # noqa: E402
 
@@ -41,7 +42,7 @@ def test_disallowed_tool_is_rejected(session):
 def test_discovery_respects_budget_and_cites(session):
     r = session().run_text("I need a dish soap under twenty dollars")
     recs = r["answer"]["recommendations"]
-    assert [s["node"] for s in r["steps"]] == ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
+    assert [s["node"] for s in r["steps"]] == ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "output_guard", "tts"]
     assert 1 <= len(recs) <= 3 and all(x["price"] <= 20 for x in recs)
     assert all(x["doc_id"] in r["final_text"] for x in recs)
     assert {c["id"] for c in r["citations"] if c["type"] == "private"} == {x["doc_id"] for x in recs}
@@ -113,7 +114,7 @@ def test_stream_reports_every_node_with_its_intermediate_result(session):
     """The UI's live view relies on a start and an end event per node, in graph order."""
     s = session()
     events = list(s.stream_text("I need a dish soap under twenty dollars"))
-    order = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
+    order = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "output_guard", "tts"]
     assert [e["node"] for e in events if e["event"] == "start"] == order
     ends = {e["node"]: e["update"] for e in events if e["event"] == "end"}
     assert list(ends) == order
@@ -121,7 +122,7 @@ def test_stream_reports_every_node_with_its_intermediate_result(session):
     assert "critique" in ends["critic"] and "final_text" in ends["finalize"]
     final = events[-1]
     assert final["event"] == "done" and final["state"]["answer"]["recommendations"]
-    assert len(final["state"]["steps"]) == 9 and len(s.history) == 1      # streamed turns are remembered too
+    assert len(final["state"]["steps"]) == 10 and len(s.history) == 1      # streamed turns are remembered too
 
 
 def test_follow_up_carries_constraints(session):

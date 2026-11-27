@@ -69,6 +69,7 @@ class Settings:
     guard_timeout: float = 10.0
     guard_on_error: str = "block"    # block (fail closed) | fallback (continue with ShopVoice's own guardrails only)
     guard_mask_mode: str = "apply"   # apply (Router sees masked text) | observe (verdict logged, original text passed on)
+    guard_checkpoints: str = "input,tool_call,tool_result,output"   # which ProofAgent checks run when the guard is on
 
 
 @lru_cache(maxsize=1)
@@ -107,6 +108,7 @@ def get_settings() -> Settings:
         guard_timeout=float(_env("PROOFAGENT_GUARD_TIMEOUT", "10")),
         guard_on_error=_env("PROOFAGENT_GUARD_ON_ERROR", "block").lower(),
         guard_mask_mode=_env("PROOFAGENT_GUARD_MASK", "apply").lower(),
+        guard_checkpoints=_env("PROOFAGENT_GUARD_CHECKPOINTS", "input,tool_call,tool_result,output").lower(),
     )
 
 

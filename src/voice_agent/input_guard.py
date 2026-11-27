@@ -92,6 +92,20 @@ def _catalog_brand_keys() -> tuple[str, ...]:
     return tuple(sorted({re.sub(r"[^a-z0-9]", "", str(b).lower()) for b in brands} - {""}))
 
 
+def _completes_brand(before: str, span: str, after: str) -> bool:
+    """True when the masked span, joined with up to two neighbouring words on each side, spells a whole catalog
+    brand ("Mrs." + "Meyers" -> "mrsmeyers"). A name that merely occurs inside a brand ("John" in "Johnson") is not."""
+    keys = set(_catalog_brand_keys())
+    norm = lambda t: re.sub(r"[^a-z0-9]", "", t.lower())  # noqa: E731
+    left = [norm(t) for t in before.split()[-2:]]
+    right = [norm(t) for t in after.split()[:2]]
+    core = norm(span)
+    if len(core) < 3:
+        return False
+    return any("".join(left[len(left) - i:] + [core] + right[:j]) in keys
+               for i in range(len(left) + 1) for j in range(len(right) + 1))
+
+
 def restore_brand_names(original: str, masked: str) -> tuple[str, list[str]]:
     """Undo PERSON masks that hide a catalog brand. Nano masks some brands as names ("Mrs. Meyers" ->
     "Mrs. [PERSON:LAST_NAME#1]"), which would remove the brand from the search. A masked word is put back only if
@@ -99,14 +113,12 @@ def restore_brand_names(original: str, masked: str) -> tuple[str, list[str]]:
     import difflib
 
     a, b = original.split(), masked.split()
-    keys = _catalog_brand_keys()
     out, restored = [], []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
         span_masked = " ".join(b[j1:j2])
         span_orig = " ".join(a[i1:i2])
-        word = re.sub(r"[^a-z0-9]", "", span_orig.lower())
-        if op == "replace" and _PLACEHOLDER.fullmatch(span_masked.strip(".,!?;:")) and len(word) >= 4 \
-                and any(word in k for k in keys):
+        if op == "replace" and _PLACEHOLDER.fullmatch(span_masked.strip(".,!?;:")) \
+                and _completes_brand(" ".join(a[:i1]), span_orig, " ".join(a[i2:])):
             out.append(span_orig)
             restored.append(span_orig)
         else:
@@ -114,7 +126,40 @@ def restore_brand_names(original: str, masked: str) -> tuple[str, list[str]]:
     return " ".join(out), restored
 
 
-def parse_response(body: Any, original: str, source: str, mask_mode: str) -> GuardResult:
+_ANY_PLACEHOLDER = re.compile(r"(\[[A-Z_]+:[A-Z_]+#\d+\])")
+_CITATION = re.compile(r"^(https?://\S+|hh23-[0-9A-Za-z]+|amz20-[0-9a-f]+|\$\s?[\d,.]+)$")
+
+
+def restore_citations(original: str, masked: str, public: tuple[str, ...] | list[str] = ()) -> tuple[str, list[str]]:
+    """For the assistant's reply: undo masks over citations (product URLs, doc_ids, prices) and catalog brand names,
+    keep every other mask. Layout and line breaks are preserved: the masked text is lined up with the original,
+    placeholder by placeholder. If the two cannot be lined up, the masked text is returned unchanged.
+    `public`: catalog text (product titles, brands) whose words are product data, e.g. a model number in a title."""
+    parts = _ANY_PLACEHOLDER.split(masked)
+    if len(parts) == 1:
+        return masked, []
+    pattern = "".join("(.+?)" if i % 2 else re.escape(p) for i, p in enumerate(parts))
+    m = re.fullmatch(pattern, original, re.S)
+    if not m:
+        return masked, []
+    out, restored, g = [], [], 1
+    for i, p in enumerate(parts):
+        if i % 2 == 0:
+            out.append(p)
+            continue
+        orig = m.group(g)
+        g += 1
+        after = _ANY_PLACEHOLDER.sub(" ", "".join(parts[i + 1:]))
+        bare = orig.strip(" []()<>.,;:")
+        if _CITATION.match(bare) or (p.startswith("[PERSON:") and _completes_brand("".join(out), orig, after))                 or (len(bare) >= 3 and any(bare in t for t in public)):
+            out.append(orig)
+            restored.append(orig)
+        else:
+            out.append(p)
+    return "".join(out), restored
+
+
+def parse_response(body: Any, original: str, source: str, mask_mode: str, direction: str = "input") -> GuardResult:
     """Turn a /v1/scan JSON body into a GuardResult. A body without decision.action is an error, not a verdict."""
     decision = (body or {}).get("decision") if isinstance(body, dict) else None
     action = decision.get("action") if isinstance(decision, dict) else None
@@ -127,9 +172,14 @@ def parse_response(body: Any, original: str, source: str, mask_mode: str) -> Gua
     if mapped == "mask" and not use_masked:
         note = "MASK returned; PROOFAGENT_GUARD_MASK=observe, so the original text was passed on"
     if use_masked and masked_text != original:
-        masked_text, restored = restore_brand_names(original, masked_text)
-        if restored:
-            note = f"Brand name(s) masked as personal data were restored: {', '.join(restored)}"
+        if direction == "output":
+            masked_text, restored = restore_citations(original, masked_text)
+            if restored:
+                note = f"Citations or brand names masked by the scan were restored: {', '.join(restored)}"
+        else:
+            masked_text, restored = restore_brand_names(original, masked_text)
+            if restored:
+                note = f"Brand name(s) masked as personal data were restored: {', '.join(restored)}"
     return GuardResult(
         source=source, decision=mapped, action=action, text=masked_text if use_masked else original,
         masked=use_masked and masked_text != original,
@@ -147,9 +197,16 @@ def _error(text: str, on_error: str, message: str, status: int | None = None, ms
 
 def scan_input(text: str, *, transport: httpx.BaseTransport | None = None) -> GuardResult:
     """Scan one user message. Never raises; never returns the API key."""
+    return scan(text, "input", transport=transport)
+
+
+def scan(text: str, direction: str = "input", *, transport: httpx.BaseTransport | None = None) -> GuardResult:
+    """Scan text with POST /v1/scan. direction "input" = the user's message, "output" = the assistant's reply."""
     s = get_settings()
-    if s.guard_mode != "on":
-        return GuardResult(source="disabled", decision="pass", text=text, note="PROOFAGENT_GUARD is off: no ProofAgent scan")
+    checkpoint = "input" if direction == "input" else "output"
+    if s.guard_mode != "on" or checkpoint not in {c.strip() for c in s.guard_checkpoints.split(",")}:
+        return GuardResult(source="disabled", decision="pass", text=text,
+                           note=f"ProofAgent {checkpoint} scan off (PROOFAGENT_GUARD / PROOFAGENT_GUARD_CHECKPOINTS)")
     if not text.strip():
         return GuardResult(source="disabled", decision="pass", text=text, note="empty input: nothing to scan")
     if not s.nano_key and transport is None:
@@ -158,7 +215,7 @@ def scan_input(text: str, *, transport: httpx.BaseTransport | None = None) -> Gu
     t0 = time.perf_counter()
     try:
         with httpx.Client(transport=transport, timeout=s.guard_timeout) as client:
-            r = client.post(f"{s.nano_url}/v1/scan", json={"text": text, "direction": "input"},
+            r = client.post(f"{s.nano_url}/v1/scan", json={"text": text, "direction": direction},
                             headers={"Authorization": f"Bearer {s.nano_key}"})
         ms = round((time.perf_counter() - t0) * 1000)
         if r.status_code >= 300:
@@ -168,7 +225,7 @@ def scan_input(text: str, *, transport: httpx.BaseTransport | None = None) -> Gu
             except ValueError:
                 message = f"HTTP {r.status_code}"
             return _error(text, s.guard_on_error, message, r.status_code, ms)
-        result = parse_response(r.json(), text, source, s.guard_mask_mode)
+        result = parse_response(r.json(), text, source, s.guard_mask_mode, direction)
     except httpx.TimeoutException:
         return _error(text, s.guard_on_error, f"timeout after {s.guard_timeout:g} s", ms=round((time.perf_counter() - t0) * 1000))
     except (httpx.HTTPError, ValueError) as e:

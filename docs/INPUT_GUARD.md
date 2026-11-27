@@ -1,18 +1,43 @@
-# ProofAgent Nano runtime input guardrail
+# ProofAgent Nano guardrails: input, during the run, output
 
-Every user message is scanned by ProofAgent Nano after ASR and before the LangGraph Router. Typed text and voice
-transcripts go through the same node. If Nano blocks the message or holds it for review, the request ends at a fixed
-reply. The Router, the LLM and the MCP tools are not run.
+ProofAgent Nano checks every request at three points, following ProofAgent's own recommended production layout (the
+"hybrid" in the agent-guardrails-cookbook, `docs/mcp-vs-api.md`): its **API** in front of and behind the agent, its
+**MCP server** inside the run. Our code makes every call, not the model, so a prompt injection cannot skip a check.
+
+| # | Checkpoint | Where | How ProofAgent is called | Stops |
+|---|---|---|---|---|
+| 1 | User message | `input_guard` node, after ASR | API `POST /v1/scan`, `direction: input` | BLOCK / REVIEW: fixed reply, nothing else runs. MASK: the Router sees the masked text |
+| 2a | Every tool call | Retriever, before each `rag.search` / `web.search` | MCP tool `check_tool_call` on `https://nano.proofagent.ai/mcp` | NEEDS_REVIEW / BLOCK: the call is not made |
+| 2b | Every tool result | Retriever, after each call | MCP tool `check_tool_result` | BLOCK on a batch: each result is re-checked on its own and only clean ones are kept. ALLOW_MASKED: masked descriptions are used |
+| 3 | The reply | `output_guard` node, before TTS | API `POST /v1/scan`, `direction: output` | BLOCK / REVIEW: the answer is withheld and a safe reply is spoken. MASK: masked text is shown and spoken |
 
 ```
-START -> asr -> input_guard -+-> router -> ... (unchanged)
-                             +-> respond_direct -> tts -> END     (block / review / failed scan)
+START -> asr -> input_guard -+-> router -> planner -> retriever -> answerer <-> critic -> finalize -+-> output_guard -> tts -> END
+           (API, checkpoint 1) |                  |  rag.search / web.search (our MCP server)          |  (API, checkpoint 3)
+                               |                  |  check_tool_call / check_tool_result (ProofAgent MCP) |
+                               +-> respond_direct (block / review / failed scan) ---------------------+
 ```
+
+What is put back after masking, and why: Nano masks product URLs as "URL", brand names as person names ("Mrs.
+Meyers"), and model numbers as IDs. Those are public catalog data that citations and matching depend on, so URLs,
+doc_ids, prices, product titles and brands are restored (`runtime_guard.PROTECTED`, `input_guard.restore_citations`,
+`restore_brand_names`). A brand is restored only when the masked word, with its neighbours, spells a whole catalog
+brand; real personal names, addresses and health data stay masked.
+
+Nano reads about 6,000 characters of input and cuts the rest, so tool results are sent as the text the model reads
+(title, brand, features, claims, snippet) in chunks below 5,000 characters; every product is checked in full.
+Fixed replies (refusals, clarifications, the guards' own replies) are ShopVoice's constant wording and are not sent.
 
 The guard is **separate from the ProofAgent evaluation harness** (`eval/`, `proofagent-harness`). The harness tests
-the finished agent offline. This guard runs on every live request, and its code doesn't import the harness. ShopVoice's
-own guardrails (`safety.check_input` in the Router, tool-output sanitising, output redaction) are unchanged and still
-run on every request the guard lets through.
+the finished agent offline; these checks run on every live request. ShopVoice's own guardrails (`safety.check_input`
+in the Router, the tool-output sanitiser, the Critic, output redaction) are unchanged and still run.
+
+**Cost.** With all four checkpoints on, a normal turn uses 6-8 Nano calls (1 input, 1 per tool call, 1 or more per
+tool result, 1 output) instead of 1; a turn whose web results contain an injection uses more, because the blocked
+batch is re-checked result by result. The free tier was 1,000 calls a month when this was written; the UI header shows
+the free calls left, read from the `usage` field ProofAgent returns with each check. `PROOFAGENT_GUARD_CHECKPOINTS`
+turns checkpoints on or off. Tests and evaluation runs keep the guard off unless `PROOFAGENT_GUARD=on` is set
+explicitly.
 
 ## Setup
 
@@ -32,6 +57,7 @@ run on every request the guard lets through.
 | `PROOFAGENT_GUARD_TIMEOUT` | `10` | seconds per scan |
 | `PROOFAGENT_GUARD_ON_ERROR` | `block` | `block` stops the request when a scan fails (fail closed, as the cookbook recommends); `fallback` continues with ShopVoice's own guardrails only |
 | `PROOFAGENT_GUARD_MASK` | `apply` | `apply` sends Nano's masked text on to the Router; `observe` records the MASK verdict but passes the original text on |
+| `PROOFAGENT_GUARD_CHECKPOINTS` | `input,tool_call,tool_result,output` | which checks run when the guard is on; `input` and `output` use the API, `tool_call` and `tool_result` the MCP server |
 
 The key is sent only in the `Authorization` header. It is never logged or shown. `logging_utils.redact` removes it
 from every log line, both by value and by the `pa_nano_` pattern.
@@ -121,8 +147,9 @@ round trip (local TTS, then ASR, then the guard). None of them needs an LLM key 
 - **Latency.** Live scans took 0.4 to 0.7 s from macOS, added to every turn before the Router starts.
 - **Quota.** ProofAgent's site says the free tier is 1,000 calls a month, and the cookbook README says 250. Each
   user turn is one call. No retry is made on HTTP 429; it counts as a failed scan.
-- **Only the input is scanned.** The cookbook also scans tool calls, tool results and replies (`direction`
-  `tool` / `output`). Those checkpoints are not integrated here.
+- **The MCP checks are made by code, not offered to the model.** ProofAgent's MCP server is also meant to be added to
+  an agent as tools it may call; here the Retriever calls them itself on every tool call and result, so the model
+  cannot skip them. `check_before_execute` is not used: the assistant has no tool with side effects.
 - **Only the current message is scanned, not the history.** Follow-ups are resolved using history, but only the
   current message is scanned.
 - **`request.id` is not unique per call.** The same text scanned about an hour apart returned the same id
