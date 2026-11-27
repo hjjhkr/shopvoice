@@ -13,6 +13,7 @@ import re
 import time
 from typing import Annotated, Any, TypedDict
 
+from ..catalog import CATALOG_NAME, PRICE_SNAPSHOT
 from ..config import get_settings
 from ..input_guard import log_record, scan_input
 from ..llm import call_structured, get_chat_model, llm_enabled, load_prompt, render
@@ -22,7 +23,7 @@ from ..safety import (CHEMICAL_SAFETY_NOTE, INJECTION_REPLY, REFUSAL, _is_denied
                       sanitize_tool_text, unsupported_claims)
 from ..schemas import AnswerDraft, Critique, Intent, Pick, Plan, ToolStep
 from .reconcile import reconcile
-from .rules import extract_budget, rule_intent
+from .rules import extract_budget, is_target_surface, rule_intent
 
 MAX_TOOL_ROUNDS = 3
 MAX_TOOL_CALLS = 6
@@ -186,6 +187,9 @@ def _mentions_amount(text: str, amount: float) -> bool:
 OUT_OF_SCOPE_REPLY = ("I can't place, confirm or track orders, manage a cart, apply coupons or reserve stock, and no order has "
                       "been placed through me. I can find, compare and price-check products in the catalog. "
                       "What are you shopping for?")
+GENERAL_OUT_OF_SCOPE_REPLY = ("That is outside what I can help with. I find, compare and price-check household supplies "
+                              "from the catalog: cleaning, laundry, dishwashing, paper goods and more. What are you shopping for?")
+_ORDER_WORDS = re.compile(r"\b(order|orders|cart|checkout|check out|coupon|promo|refund|receipt|reserve|track|deliver|shipping)\b", re.I)
 
 
 def router_node(state: AgentState) -> dict:
@@ -300,8 +304,10 @@ def respond_direct_node(state: AgentState) -> dict:
         text = intent.get("clarification_question") or "What kind of product are you looking for, and do you have a budget?"
     elif task == "chitchat":
         text = "Hi! Tell me what you're shopping for and your budget, and I'll find options from the catalog."
-    else:
+    elif _ORDER_WORDS.search(state.get("transcript") or ""):
         text = OUT_OF_SCOPE_REPLY
+    else:
+        text = GENERAL_OUT_OF_SCOPE_REPLY
     text = check_output(text)
     return {"final_text": text, "spoken_summary": _trim_spoken(text), "citations": [],
             "answer": {"recommendations": [], "caveats": [], "follow_up_question": ""},
@@ -361,7 +367,7 @@ def _validate_plan(plan: Plan, intent: Intent, web_ok: bool) -> tuple[Plan, list
                               purpose="user asked for current price / availability"))
         notes.append("added web.search: user asked for live info")
     if intent.wants_live_info and not web_ok:
-        notes.append("user asked for live info but web.search is not configured; answering from the 2020 catalog only")
+        notes.append("user asked for live info but web.search is not configured; answering from the catalog only")
     plan.steps = steps[:4]
     plan.use_rag = True
     plan.use_web = any(s.tool == "web.search" for s in plan.steps)
@@ -427,7 +433,7 @@ def _tool_calls_text(calls: list[dict]) -> str:
 
 
 def _head_noun(product_type: str | None) -> str | None:
-    """'wooden puzzle for toddlers' -> 'puzzle'; 'LEGO building kits' -> 'kit'. The thing itself, used to
+    """'stainless steel cleaner for kitchens' -> 'cleaner'; 'Swiffer refill packs' -> None (generic). The thing itself, used to
     reject hits that share only an adjective with the request."""
     if not product_type:
         return None
@@ -438,13 +444,14 @@ def _head_noun(product_type: str | None) -> str | None:
     head = words[-1]
     if len(head) > 3 and head.endswith("s") and not head.endswith("ss"):
         head = head[:-1]
-    if head in _GENERIC_HEADS:      # "a LEGO set", "a gift": the word names no product type to verify
+    if head in _GENERIC_HEADS:      # "a Clorox pack", "a gift": the word names no product type to verify
         return None
     return head if len(head) > 2 else None
 
 
 _GENERIC_HEADS = {"set", "kit", "toy", "gift", "present", "option", "item", "product", "thing", "stuff", "one", "pack",
-                  "piece", "something", "anything", "choice", "pick"}
+                  "piece", "something", "anything", "choice", "pick", "supply", "supplie", "refill", "bundle", "brand",
+                  "count", "bottle", "box", "case", "variety"}
 
 
 NAME_MATCH = 0.6      # share of a named product's words that must occur in a catalog title
@@ -453,7 +460,7 @@ NAME_MATCH = 0.6      # share of a named product's words that must occur in a ca
 def _name_coverage(name: str, title: str) -> float:
     words = {w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) > 1 and w not in {"the", "and", "for", "with", "price", "of"}}
     if len(words) < 2:
-        return 0.0          # a single word ("puzzle") is a product type, not a named product
+        return 0.0          # a single word ("detergent") is a product type, not a named product
     return len(words & set(re.findall(r"[a-z0-9]+", title.lower()))) / len(words)
 
 
@@ -461,9 +468,9 @@ def _live_targets(products: list[dict], said: set[str], limit: int = 2) -> list[
     """The products that get a live price lookup, the ones the user named first.
 
     A product is scored by the spoken words in its title, ignoring words that say nothing about which product
-    is meant: stop words and words found in most candidate titles ("board", "game", the brand). When the user
-    named a product, candidates with less than half the best score are skipped, so "the Tsuro board game" does
-    not also spend a search on a board-game T-shirt. With no named product the top `limit` matches are checked."""
+    is meant: stop words and words found in most candidate titles ("laundry", "detergent", the brand). When the
+    user named a product, candidates with less than half the best score are skipped, so "the Tru Earth detergent
+    strips" does not also spend a search on another brand's detergent. With no named product the top `limit` matches are checked."""
     titles = [set(re.findall(r"[a-z0-9]+", p["title"].lower())) for p in products]
     common = {t for t in set().union(*titles) if sum(t in x for x in titles) * 2 > len(titles)} if len(titles) > 1 else set()
     skip = common | {"the", "and", "for", "with", "of", "in", "is", "it", "to", "a", "s"}
@@ -589,7 +596,8 @@ def retriever_node(state: AgentState) -> dict:
             calls.append({"tool": "rag.search", "args": args, "origin": "relaxation", "count": len(out.get("results", [])),
                           "error": out.get("error"), "ms": None, "injection_flagged": 0,
                           "ids": [r["doc_id"] for r in out.get("results", [])]})
-            relaxations.append("Rating filter was dropped: this catalog contains no ratings, so a minimum rating cannot be checked.")
+            relaxations.append(f"No match was rated {constraints['min_rating']:g} stars or higher, so the rating filter was dropped; "
+                               "the closest matches are shown with their actual ratings.")
     if not strong():
         simple = constraints.get("product_type") or intent["search_query"]
         if simple and simple.lower() != intent["search_query"].lower():
@@ -620,7 +628,7 @@ def retriever_node(state: AgentState) -> dict:
     head = _head_noun(constraints.get("product_type") or intent["search_query"])
     if head and evidence_rag:
         same_type = [r for r in evidence_rag if re.search(rf"\b{re.escape(head)}(s|es)?\b", f"{r['title']} {r.get('category') or ''}", re.I)]
-        if same_type:      # e.g. drop a "wooden maraca" returned for "wooden puzzle"
+        if same_type:      # e.g. drop a "glass cleaner wipe" returned for "glass cleaner spray"
             evidence_rag = same_type
         else:
             # Nothing is named like the request. Keep only near-certain semantic matches (synonyms such as
@@ -630,6 +638,8 @@ def retriever_node(state: AgentState) -> dict:
                 relaxations.append(f"No catalog product is named '{head}'; the options shown are the closest by description, not exact matches.")
                 spoken_notes.append("These are close matches, not exact ones.")
     material = (constraints.get("material") or "").lower().strip()
+    if material and is_target_surface(material, f"{constraints.get('product_type') or ''} {state.get('transcript', '')}"):
+        material = ""      # "stainless steel cleaner": the surface it cleans, not what it is made of
     if material and evidence_rag:
         stem = re.sub(r"(en|s)$", "", material) if len(material) > 4 else material      # wooden -> wood
         made_of = [r for r in evidence_rag
@@ -643,7 +653,7 @@ def retriever_node(state: AgentState) -> dict:
     evidence_rag = evidence_rag[:6]
 
     # --- 3c. products the user names are looked up on their own, WITHOUT the budget filter, and shown next to
-    # the in-budget matches. "Find a LEGO set under $5 and check the Creative Suitcase price" then gets the same
+    # the in-budget matches. "Find a dish soap under $5 and check the Dawn Platinum price" then gets the same
     # answer whichever task label the Router chose, and an over-budget product is reported as over budget
     # instead of "not in the catalog".
     names = [n.strip() for n in (intent.get("named_products") or []) if n and n.strip()][:2]
@@ -674,7 +684,7 @@ def retriever_node(state: AgentState) -> dict:
 
     # --- 4. live comparison for the top catalog matches (only when planned)
     if plan.get("use_web") and web_ok and evidence_rag:
-        # The products the user actually named come first ("today's Safari price" -> the Safari puzzle), and a
+        # The products the user actually named come first ("today's Easy-Off price" -> the Easy-Off cleaner), and a
         # live lookup is guaranteed for them even if the LLM searched for something else.
         said = set(re.findall(r"[a-z0-9]+", state.get("transcript", "").lower()))
         targets = _live_targets(evidence_rag, said)
@@ -718,10 +728,12 @@ def _evidence_for_llm(evidence: list[dict]) -> str:
     rows = []
     for e in evidence:
         row = {"doc_id": e["doc_id"], "title": e["title"], "price": e["price"], "rating": e.get("rating"),
+               "rating_count": e.get("rating_count"),
                "brand": (f"{e['brand']} (inferred from title)" if e.get("brand") and e.get("brand_inferred") else e.get("brand")),
                "ingredients_or_materials": e.get("ingredients"), "category": e.get("category"),
+               "listing_claims": e.get("claims"), "scent": e.get("scent"), "form": e.get("form"), "size": e.get("size"),
                "features": (e.get("features") or "")[:350], "price_per_oz": e.get("price_per_oz"),
-               "manufacturer_recommended_age": e.get("recommended_age")}
+               "price_per_count": e.get("price_per_count"), "recommended_age": e.get("recommended_age")}
         if e.get("price_max"):
             row["price_range_max"] = e["price_max"]
         if e.get("live"):
@@ -755,7 +767,7 @@ def _live_unmatched_text(state: AgentState) -> str:
 
 def _evidence_text(evidence: list[dict]) -> str:
     return " ".join(f"{e['title']} {e.get('features') or ''} {e.get('ingredients') or ''} {e.get('category') or ''} "
-                    f"{e.get('recommended_age') or ''} "
+                    f"{e.get('recommended_age') or ''} {e.get('claims') or ''} {e.get('scent') or ''} {e.get('form') or ''} "
                     f"{(e.get('live') or {}).get('title') or ''}" for e in evidence)
 
 
@@ -780,8 +792,10 @@ def _rule_answer(state: AgentState) -> AnswerDraft:
         bits = [f"Listed at {_money(e['price'])} in the catalog"]
         if e.get("ingredients"):
             bits.append(f"materials: {e['ingredients']}")
+        if e.get("rating") is not None:
+            bits.append(f"rated {e['rating']:.1f} out of 5 by {e.get('rating_count') or 'some'} buyers")
         if e.get("recommended_age"):
-            bits.append(f"manufacturer recommended age: {e['recommended_age']}")
+            bits.append(f"recommended age: {e['recommended_age']}")
         why = "; ".join(bits) + "."
         if _first_feature(e):
             why += f" Catalog description: \"{_first_feature(e)}\"."
@@ -791,7 +805,7 @@ def _rule_answer(state: AgentState) -> AnswerDraft:
     n = len(picks)
     if top.get("budget_note"):      # a price lookup of a product that turns out to be over budget
         live = (top.get("live") or {}).get("price")
-        spoken = (f"{_short_title(top['title'])} is {_money(top['price'])} in the 2020 catalog"
+        spoken = (f"{_short_title(top['title'])} is {_money(top['price'])} in the {PRICE_SNAPSHOT} catalog"
                   + (f" and {_money(live)} live" if live is not None else "")
                   + f", which is above your {_money(c['max_price'])} budget. "
                   + (f"{n - 1} option{'s' if n - 1 != 1 else ''} within budget {'are' if n - 1 != 1 else 'is'} on screen."
@@ -800,7 +814,7 @@ def _rule_answer(state: AgentState) -> AnswerDraft:
         live = top["live"]                # a price lookup: say both prices, the live one with its shop
         shop = re.sub(r"^https?://(www\.)?|/.*$", "", live.get("url") or "")
         stock = {"in_stock": ", in stock", "out_of_stock": ", but out of stock"}.get(live.get("availability"), "")
-        spoken = (f"{_short_title(top['title'])} is {_money(top['price'])} in the 2020 catalog. The lowest live price I found is "
+        spoken = (f"{_short_title(top['title'])} is {_money(top['price'])} in the {PRICE_SNAPSHOT} catalog. The lowest live price I found is "
                   f"{_money(live['price'])}" + (f" at {shop}" if shop else "") + f"{stock}. Sources are on screen.")
     else:
         spoken = (f"I found {n} option{'s' if n != 1 else ''}{budget} in the catalog. My top pick is {_short_title(top['title'])} "
@@ -845,8 +859,10 @@ def _hydrate(draft: AnswerDraft, evidence: list[dict]) -> dict:
         live = e.get("live") or {}
         recs.append({
             "doc_id": doc_id, "sku": e.get("sku"), "title": e["title"], "price": e.get("price"), "price_max": e.get("price_max"),
-            "rating": e.get("rating"), "brand": e.get("brand"), "brand_inferred": e.get("brand_inferred"),
-            "ingredients": e.get("ingredients"), "price_per_oz": e.get("price_per_oz"), "catalog_url": e.get("url"),
+            "rating": e.get("rating"), "rating_count": e.get("rating_count"), "brand": e.get("brand"),
+            "brand_inferred": e.get("brand_inferred"), "ingredients": e.get("ingredients"), "claims": e.get("claims"),
+            "scent": e.get("scent"), "size": e.get("size"), "price_per_oz": e.get("price_per_oz"),
+            "price_per_count": e.get("price_per_count"), "catalog_url": e.get("url"),
             "recommended_age": e.get("recommended_age"), "brand_source": e.get("brand_source"),
             "why": pick.why.strip(), "live_price": live.get("price"), "live_url": live.get("url"),
             "live_availability": live.get("availability"), "budget_note": e.get("budget_note"),
@@ -903,7 +919,11 @@ def answerer_node(state: AgentState) -> dict:
 
 # ========================================================================= Critic
 _PRICE_IN_TEXT = re.compile(r"\$\s?(\d{1,5}(?:,\d{3})*(?:\.\d{1,2})?)")
-_RATING_IN_TEXT = re.compile(r"\b\d(?:\.\d)?[- ]?stars?\b|\brated\s+\d|\b\d(?:\.\d)?\s*out of\s*5\b|\bhighly rated\b|\breviews? (say|praise|mention)", re.I)
+# A star rating stated in the answer ("4.6 stars", "rated 4.6", "4.6 out of 5") must be one of the evidence ratings.
+_RATING_VALUE = re.compile(r"\b(\d(?:\.\d{1,2})?)\s*(?:-|\s)?(?:stars?\b|out of (?:5|five)\b)|\brated\s+(\d(?:\.\d{1,2})?)\b", re.I)
+# The catalog has average ratings and rating counts, but no review text: what reviewers "say" cannot be grounded.
+_REVIEW_CLAIM = re.compile(r"\breviews? (say|says|praise|mention|report|complain|note)|\breviewers?\b|\b(customers|buyers|users) "
+                           r"(say|love|praise|report|complain|mention|note)", re.I)
 
 
 def _history_prices(history: list[dict] | None) -> set[float]:
@@ -938,7 +958,8 @@ def deterministic_checks(answer: dict, evidence: list[dict], constraints: dict, 
 
     allowed = {v for k in ("max_price", "min_price") if (v := constraints.get(k)) is not None} | (known_prices or set())
     for e in evidence:
-        allowed.update(v for v in (e.get("price"), e.get("price_max"), e.get("price_per_oz"), (e.get("live") or {}).get("price")) if v is not None)
+        allowed.update(v for v in (e.get("price"), e.get("price_max"), e.get("price_per_oz"), e.get("price_per_count"),
+                                   (e.get("live") or {}).get("price")) if v is not None)
         allowed.update(o["price"] for o in (e.get("live") or {}).get("offers") or [] if o.get("price") is not None)   # other shops
     for m in _PRICE_IN_TEXT.finditer(text):
         value = float(m.group(1).replace(",", ""))
@@ -947,9 +968,18 @@ def deterministic_checks(answer: dict, evidence: list[dict], constraints: dict, 
             continue      # "I cannot confirm the $19.78 price" names a figure in order to decline it
         if not any(abs(value - a) <= tolerance for a in allowed):
             blocking.append(f"Price '{m.group(0)}' does not appear in the evidence.")
-    if _RATING_IN_TEXT.search(text) and not any(e.get("rating") is not None for e in evidence) \
-            and not re.search(r"\bno ratings?\b|\bnot rated\b|\bratings? (are|is)(n't| not)\b|\bwithout ratings?\b", text, re.I):
-        blocking.append("A rating or review is mentioned, but the evidence contains no ratings or reviews.")
+    ratings = [e["rating"] for e in evidence if e.get("rating") is not None]
+    for m in _RATING_VALUE.finditer(text):
+        value = float(m.group(1) or m.group(2))
+        if value > 5 or _is_denied(text, m.start(), m.end()):
+            continue      # "10-star" is not a rating; "it is not rated 4.8" declines the figure
+        if not any(abs(value - r) <= 0.051 for r in ratings):
+            blocking.append(f"Rating '{m.group(0).strip()}' does not match any rating in the evidence.")
+    for m in _REVIEW_CLAIM.finditer(text):
+        if not _is_denied(text, m.start(), m.end()):
+            blocking.append("Review content is described, but the evidence has only average ratings and rating counts, "
+                            "no review text.")
+            break
     blocking += unsupported_claims(text, _evidence_text(evidence))
 
     words = len(answer.get("spoken_summary", "").split())
@@ -957,7 +987,7 @@ def deterministic_checks(answer: dict, evidence: list[dict], constraints: dict, 
         minor.append(f"Spoken summary is {words} words (limit {MAX_SPOKEN_WORDS}); it will be trimmed.")
     cited = {r["doc_id"] for r in recs}
     for c in conflicts:
-        if c["doc_id"] in cited and not re.search(r"live|current|now|today|2020|catalog price|unavailable|out of stock", text, re.I):
+        if c["doc_id"] in cited and not re.search(r"live|current|now|today|2023|catalog price|unavailable|out of stock", text, re.I):
             minor.append(f"Catalog/live {c['field']} conflict for {c['doc_id']} is not mentioned; a caveat will be added.")
             break
     return blocking, minor
@@ -1026,7 +1056,7 @@ def route_after_critic(state: AgentState) -> str:
 
 # ======================================================================= Finalize
 def _trim_spoken(text: str, limit: int = MAX_SPOKEN_WORDS) -> str:
-    text = re.sub(r"\s+", " ", re.sub(r"https?://\S+|\[?amz20-[0-9a-f]+\]?", "", text)).strip()
+    text = re.sub(r"\s+", " ", re.sub(r"https?://\S+|\[?(?:amz20|hh23)-[0-9A-Za-z]+\]?", "", text)).strip()
     if len(text.split()) <= limit:
         return text
     kept: list[str] = []
@@ -1094,7 +1124,7 @@ def finalize_node(state: AgentState) -> dict:
             if c["field"] == "price":
                 spread = (f" Live prices range from {_money(c['live_range'][0])} to {_money(c['live_range'][1])} across "
                           f"{c.get('live_sources')} shops; the lowest is shown.") if c.get("live_range") else ""
-                add(f"Price conflict for {c['title'][:50]}: catalog (Jan 2020) {_money(c['catalog_value'])} vs live {_money(c['live_value'])} "
+                add(f"Price conflict for {c['title'][:50]}: catalog ({PRICE_SNAPSHOT}) {_money(c['catalog_value'])} vs live {_money(c['live_value'])} "
                     f"({c['live_url']}). The live price is newer.{spread}")
             else:
                 add(f"{c['title'][:50]} is listed in the catalog but reported unavailable by the live source ({c['live_url']}).")
@@ -1105,13 +1135,11 @@ def finalize_node(state: AgentState) -> dict:
         add(note)
     for note in state["plan"].get("notes") or []:
         if "not configured" in note:
-            add("Live price check is not available in this deployment; prices are the January 2020 catalog snapshot.")
-    if recs and all(r.get("rating") is None for r in recs):
-        add("This catalog has no ratings, so options are not ranked by rating.", unless=r"\bratings?\b")
+            add(f"Live price check is not available in this deployment; prices are the {PRICE_SNAPSHOT} catalog snapshot.")
     if recs and not any(r.get("live_price") for r in recs):
-        add("Prices are from the January 2020 catalog snapshot and may have changed.", unless=r"2020")
+        add(f"Prices are from the {PRICE_SNAPSHOT} catalog snapshot and may have changed.", unless=PRICE_SNAPSHOT)
     if any(r.get("brand_inferred") and r.get("brand") for r in recs):
-        add("Brands marked * are inferred from the product title (the dataset's brand column is empty).", unless=r"\bbrands?\b.*inferred")
+        add("Brands marked * are inferred from the product title (the listing names no brand).", unless=r"\bbrands?\b.*inferred")
     answer["caveats"] = caveats
 
     rec_ids = {r["doc_id"] for r in recs}
@@ -1121,7 +1149,7 @@ def finalize_node(state: AgentState) -> dict:
     answer["caveats"] = caveats
 
     spoken = _trim_spoken(check_output(answer.get("spoken_summary", "")))
-    if any(c["doc_id"] in rec_ids for c in state.get("conflicts") or []) and not re.search(r"live|current|now|2020|unavailable", spoken, re.I) \
+    if any(c["doc_id"] in rec_ids for c in state.get("conflicts") or []) and not re.search(r"live|current|now|2020|2023|catalog|unavailable", spoken, re.I) \
             and len(spoken.split()) <= MAX_SPOKEN_WORDS - 9:
         spoken += " Note the live price differs from the catalog; see screen."
     if recs:      # an unmet constraint must be heard, not only shown
@@ -1134,7 +1162,7 @@ def finalize_node(state: AgentState) -> dict:
     citations = []
     for r in recs:
         citations.append({"type": "private", "id": r["doc_id"], "title": r["title"], "url": r.get("catalog_url"),
-                          "source": "Amazon Product Dataset 2020"})
+                          "source": CATALOG_NAME})
         if r.get("live_url"):
             citations.append({"type": "live", "id": r["live_url"], "title": r["title"], "url": r["live_url"],
                               "price": r.get("live_price"), "source": "web.search"})
@@ -1142,7 +1170,7 @@ def finalize_node(state: AgentState) -> dict:
     lines = []
     for i, r in enumerate(recs, 1):
         live = f" | live {_money(r['live_price'])} ({r['live_url']})" if r.get("live_price") else (f" | live source: {r['live_url']}" if r.get("live_url") else "")
-        lines.append(f"{i}. {r['title']} - {_money(r['price'])} (catalog, Jan 2020){live} [doc_id: {r['doc_id']}]\n   {r['why']}")
+        lines.append(f"{i}. {r['title']} - {_money(r['price'])} (catalog, {PRICE_SNAPSHOT}){live} [doc_id: {r['doc_id']}]\n   {r['why']}")
     parts = [spoken]
     if lines:
         parts.append("\n".join(lines))

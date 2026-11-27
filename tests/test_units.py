@@ -24,20 +24,41 @@ def test_parse_price():
 def test_weight_brand_materials():
     assert parse_weight_oz("13.4 ounces") == 13.4
     assert parse_weight_oz("2 pounds") == 32.0
-    assert infer_brand("Melissa & Doug Safari Puzzle") == "Melissa & Doug"
-    assert infer_brand("LEGO Classic Box") == "LEGO"
-    assert infer_brand("The Dog Game") is None          # unknown rather than a wrong guess
+    assert parse_weight_oz("48 Fluid Ounces") == 48.0
+    assert parse_weight_oz("1 Gallon") == 128.0
+    assert parse_weight_oz("100.0 Count") is None              # a count is not a weight
+    assert infer_brand("Arm & Hammer Clean Burst Detergent") == "Arm & Hammer"
+    assert infer_brand("Clorox Disinfecting Wipes") == "Clorox"
+    assert infer_brand("The Pink Stuff Paste") is None          # unknown rather than a wrong guess
     assert extract_materials("Stainless Steel bottle, BPA free") == "stainless steel, bpa-free"
 
 
-def test_fields_recovered_from_specification_text():
-    from voice_agent.data.ingest import parse_recommended_age, spec_manufacturer, tech_brand_name
-    spec = "ProductDimensions:3x6x13inches|Manufacturer:TheNorthwestCompany|ASIN:B076Y2SNHM|Manufacturerrecommendedage:36months-15years"
-    assert spec_manufacturer(spec) == "The Northwest Company"
-    assert parse_recommended_age(spec) == ("36 months - 15 years", 3.0)
-    assert parse_recommended_age("Manufacturerrecommendedage:3yearsandup|x:y") == ("3 years and up", 3.0)
-    assert parse_recommended_age("ASIN:B000") == (None, None) and spec_manufacturer(float("nan")) is None
-    assert tech_brand_name("great for class | Brand Name Carson-Dellosa Item Weight 1.8 pounds") == "Carson-Dellosa"
+EASY_OFF = {
+    "parent_asin": "B000PYF8VM", "title": "Easy-Off Heavy Duty Oven Cleaner, 14.5 oz", "price": 6.48, "store": "Easy-Off",
+    "average_rating": 4.6, "rating_number": 12520,
+    "categories": ["Health & Household", "Household Supplies", "Household Cleaning", "Kitchen Cleaners", "Oven & Grill Cleaners"],
+    "features": ["Cleans in as little as 5 minutes", "Safe on stainless steel, glass and enamel", "Fume-free formula, biodegradable surfactants"],
+    "description": [], "details": {"Brand": "Easy-Off", "Item Form": "Spray", "Item Volume": "14.5 Fluid Ounces", "Scent": "Fresh",
+                                   "Material": "Oven cleaner", "Material Feature": "Phosphate Free"}}
+
+
+def test_household_product_row():
+    from voice_agent.data.ingest import product_row
+    r = product_row(EASY_OFF)
+    assert r["doc_id"] == "hh23-B000PYF8VM" and r["url"] == "https://www.amazon.com/dp/B000PYF8VM"
+    assert (r["brand"], r["brand_source"], r["brand_inferred"]) == ("Easy-Off", "brand", False)
+    assert (r["rating"], r["rating_count"]) == (4.6, 12520)                    # from the dataset, never estimated
+    assert r["top_category"] == "Household Cleaning"
+    assert r["price_per_oz"] == round(6.48 / 14.5, 3) and r["scent"] == "Fresh" and r["form"] == "Spray"
+    assert "phosphate-free" in r["claims"] and "biodegradable" in r["claims"]   # listing attributes become claims
+    # "Safe on stainless steel, glass" names surfaces, and "Material: Oven cleaner" is not a material: no materials
+    assert r["ingredients"] is None                     # a cleaner records no materials
+    brush = dict(EASY_OFF, title="Bamboo Dish Brush with Sisal Bristles", details={"Material": "Bamboo, Sisal"},
+                 features=["Ergonomic handle", "Replaceable head"],
+                 categories=["Health & Household", "Household Supplies", "Cleaning Tools", "Brushes"])
+    assert product_row(brush)["ingredients"] == "bamboo"
+    no_brand = dict(EASY_OFF, details={}, store=None)
+    assert product_row(no_brand)["brand_source"] == "title"
 
 
 # ---------------------------------------------------------------- router rules
@@ -75,8 +96,8 @@ def test_head_noun():
 def test_rule_intent():
     i = rule_intent("Recommend an eco-friendly stainless steel cleaner under fifteen dollars")
     assert i.task == "product_search" and i.constraints.max_price == 15
-    assert "eco-friendly" in i.constraints.preferences and i.constraints.material == "stainless steel"
-    assert rule_intent("What's the current price of the LEGO Classic box?").wants_live_info
+    assert "eco-friendly" in i.constraints.preferences and i.constraints.material is None   # the surface it cleans
+    assert rule_intent("What's the current price of the Easy-Off oven cleaner?").wants_live_info
     assert rule_intent("I need something").task == "clarification_needed"
     assert rule_intent("hello there").task == "chitchat"
 
@@ -136,19 +157,19 @@ def test_web_normalisation_and_domain_rules(monkeypatch):
     out = normalize(items, settings, 5)
     assert len(out) == 1 and out[0]["price"] == 12.49 and out[0]["availability"] == "in_stock"
     assert extract_price("was US $1,299.00 now") == 1299.0 and extract_availability("Currently unavailable") == "out_of_stock"
-    monkeypatch.delenv("WEB_BLOCKED_DOMAINS")
+    monkeypatch.undo()          # restore the environment other test modules set, then the cached settings
     reload_settings()
 
 
 def test_web_search_fixture_cache_hit(monkeypatch):
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", "fixture")
     web = WebSearch(reload_settings())
-    first = asyncio.run(web.search("Melissa Doug safari chunky puzzle price"))
-    second = asyncio.run(web.search("Melissa Doug safari chunky puzzle price"))
+    first = asyncio.run(web.search("Affresh stainless steel cleaning spray price"))
+    second = asyncio.run(web.search("Affresh stainless steel cleaning spray price"))
     assert first["results"] and first["meta"]["cache_hit"] is False and second["meta"]["cache_hit"] is True
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", "none")
     assert "not configured" in asyncio.run(WebSearch(reload_settings()).search("x"))["error"]
-    monkeypatch.delenv("WEB_SEARCH_PROVIDER")
+    monkeypatch.undo()          # restore the environment other test modules set, then the cached settings
     reload_settings()
 
 
@@ -193,8 +214,7 @@ def test_tavily_provider_parsing_and_readiness(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key-0123456789")
     assert provider_ready(reload_settings())
     assert "tvly-test-key-0123456789" not in redact("Authorization: Bearer tvly-test-key-0123456789")
-    monkeypatch.delenv("WEB_SEARCH_PROVIDER")
-    monkeypatch.delenv("TAVILY_API_KEY")
+    monkeypatch.undo()          # restore the environment other test modules set, then the cached settings
     reload_settings()
 
 
@@ -236,11 +256,13 @@ def test_denied_claims_are_not_flagged():
 
 
 # ---------------------------------------------------------------- critic
-EVIDENCE = [{"doc_id": "d1", "title": "Wooden Puzzle", "price": 9.99, "features": "8 wooden pieces", "rating": None}]
+EVIDENCE = [{"doc_id": "d1", "title": "Bamboo Dish Brush", "price": 9.99, "features": "bamboo handle, sisal bristles",
+             "rating": 4.6, "rating_count": 1830}]
 
 
-def _answer(why="An 8-piece wooden puzzle.", spoken="My top pick is the Wooden Puzzle at $9.99.", doc_id="d1", price=9.99, dropped=()):
-    return {"recommendations": [{"doc_id": doc_id, "title": "Wooden Puzzle", "price": price, "why": why}],
+def _answer(why="A bamboo dish brush with sisal bristles.", spoken="My top pick is the Bamboo Dish Brush at $9.99.", doc_id="d1",
+            price=9.99, dropped=()):
+    return {"recommendations": [{"doc_id": doc_id, "title": "Bamboo Dish Brush", "price": price, "why": why}],
             "spoken_summary": spoken, "caveats": [], "dropped_picks": list(dropped)}
 
 
@@ -253,8 +275,12 @@ def test_critic_blocks_ungrounded_answers():
     assert any("above" in i for i in over)
     price, _ = deterministic_checks(_answer(spoken="It costs $4.99."), EVIDENCE, {}, [])
     assert any("$4.99" in i for i in price)
-    rating, _ = deterministic_checks(_answer(why="Rated 4.8 stars by parents."), EVIDENCE, {}, [])
-    assert any("rating" in i.lower() for i in rating)
+    rating, _ = deterministic_checks(_answer(why="Rated 4.8 stars by buyers."), EVIDENCE, {}, [])
+    assert any("rating" in i.lower() for i in rating)                      # evidence says 4.6, not 4.8
+    ok, _ = deterministic_checks(_answer(why="Rated 4.6 stars from 1,830 ratings."), EVIDENCE, {}, [])
+    assert ok == []                                                          # the evidence rating is grounded
+    reviews, _ = deterministic_checks(_answer(why="Reviewers say it lasts for months."), EVIDENCE, {}, [])
+    assert any("review" in i.lower() for i in reviews)                      # there is no review text to ground it
     claim, _ = deterministic_checks(_answer(why="The #1 best-seller, kills 99.9% of germs."), EVIDENCE, {}, [])
     assert len(claim) >= 2
     fake, _ = deterministic_checks(_answer(dropped=["amz20-fake"]), EVIDENCE, {}, [])
@@ -265,6 +291,7 @@ def test_spoken_summary_is_capped():
     long = " ".join(["This is a sentence with seven words."] * 12)
     assert len(_trim_spoken(long).split()) <= 45
     assert "amz20" not in _trim_spoken("Top pick [amz20-abc123def456] see https://x.test/a now.")
+    assert "hh23" not in _trim_spoken("Top pick [hh23-B088HZ8M39] see https://x.test/a now.")
 
 
 def test_live_lookup_targets_only_the_named_product():
@@ -322,3 +349,24 @@ def test_tts_output_is_rewritten_as_pcm_wav(tmp_path):
     before = out.read_bytes()
     _ensure_pcm_wav(out)                                          # already WAV: left untouched
     assert out.read_bytes() == before
+
+
+def test_surface_is_not_a_material():
+    from voice_agent.graph.rules import is_target_surface
+    assert rule_intent("Recommend an eco-friendly stainless steel cleaner under fifteen dollars").constraints.material is None
+    assert rule_intent("a bamboo scrub brush for dishes").constraints.material == "bamboo"
+    assert rule_intent("stainless steel straws").constraints.material == "stainless steel"
+    assert is_target_surface("glass", "glass cleaning wipes") and is_target_surface("wood", "a cleaner safe on wood floors")
+    assert not is_target_surface("bamboo", "bamboo cutting board")
+
+
+def test_rating_floor_is_parsed_and_kept():
+    i = rule_intent("Find a fragrance free laundry detergent rated at least four and a half stars under twenty dollars")
+    assert i.constraints.min_rating == 4.5 and i.constraints.max_price == 20 and "fragrance-free" in i.constraints.preferences
+
+
+def test_out_of_scope_reply_matches_the_request():
+    from voice_agent.graph.nodes import GENERAL_OUT_OF_SCOPE_REPLY, OUT_OF_SCOPE_REPLY, respond_direct_node
+    base = {"intent": {"task": "out_of_scope", "safety_flag": "none"}}
+    assert respond_direct_node({**base, "transcript": "Place the order and send me the receipt"})["final_text"] == OUT_OF_SCOPE_REPLY
+    assert respond_direct_node({**base, "transcript": "What's the weather tomorrow?"})["final_text"] == GENERAL_OUT_OF_SCOPE_REPLY

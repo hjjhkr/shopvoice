@@ -26,8 +26,10 @@ The existing ShopVoice pattern guardrails (safety.check_input) are separate and 
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -76,6 +78,42 @@ def _risks(body: dict) -> list[str]:
     return out
 
 
+_PLACEHOLDER = re.compile(r"\[PERSON:[A-Z_]+#\d+\]")
+
+
+@lru_cache(maxsize=1)
+def _catalog_brand_keys() -> tuple[str, ...]:
+    """Every catalog brand as lowercase letters and digits only ("Mrs. Meyer's" -> "mrsmeyers")."""
+    try:
+        import pandas as pd
+        brands = pd.read_parquet(get_settings().products_parquet, columns=["brand"])["brand"].dropna().unique()
+    except Exception:       # no catalog built: nothing to restore against
+        return ()
+    return tuple(sorted({re.sub(r"[^a-z0-9]", "", str(b).lower()) for b in brands} - {""}))
+
+
+def restore_brand_names(original: str, masked: str) -> tuple[str, list[str]]:
+    """Undo PERSON masks that hide a catalog brand. Nano masks some brands as names ("Mrs. Meyers" ->
+    "Mrs. [PERSON:LAST_NAME#1]"), which would remove the brand from the search. A masked word is put back only if
+    it is part of a catalog brand name; real personal names, and every other kind of mask, stay masked."""
+    import difflib
+
+    a, b = original.split(), masked.split()
+    keys = _catalog_brand_keys()
+    out, restored = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        span_masked = " ".join(b[j1:j2])
+        span_orig = " ".join(a[i1:i2])
+        word = re.sub(r"[^a-z0-9]", "", span_orig.lower())
+        if op == "replace" and _PLACEHOLDER.fullmatch(span_masked.strip(".,!?;:")) and len(word) >= 4 \
+                and any(word in k for k in keys):
+            out.append(span_orig)
+            restored.append(span_orig)
+        else:
+            out.extend(b[j1:j2])
+    return " ".join(out), restored
+
+
 def parse_response(body: Any, original: str, source: str, mask_mode: str) -> GuardResult:
     """Turn a /v1/scan JSON body into a GuardResult. A body without decision.action is an error, not a verdict."""
     decision = (body or {}).get("decision") if isinstance(body, dict) else None
@@ -88,6 +126,10 @@ def parse_response(body: Any, original: str, source: str, mask_mode: str) -> Gua
     note = "" if action.upper() in NANO_ACTIONS else f"unknown action {action!r}: treated as block (fail closed)"
     if mapped == "mask" and not use_masked:
         note = "MASK returned; PROOFAGENT_GUARD_MASK=observe, so the original text was passed on"
+    if use_masked and masked_text != original:
+        masked_text, restored = restore_brand_names(original, masked_text)
+        if restored:
+            note = f"Brand name(s) masked as personal data were restored: {', '.join(restored)}"
     return GuardResult(
         source=source, decision=mapped, action=action, text=masked_text if use_masked else original,
         masked=use_masked and masked_text != original,

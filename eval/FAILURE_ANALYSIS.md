@@ -4,6 +4,30 @@ Agent LLM: `anthropic/claude-haiku-5-5`. ProofAgent harness LLM (attacker + jury
 `anthropic/claude-sonnet-5-5` as fallback for juror calls whose reply Haiku returned as invalid JSON (from run 2 on).
 Live data during evaluation: the fixture web provider. Raw reports: [results/](results/). Date: 2026-11-19.
 
+> **Catalog change (2026-11-27).** Runs 1-4 and failure cases F1-F12 were measured on the first catalog, the Amazon
+> Product Dataset 2020 (toys, no ratings). The project now uses Amazon Reviews 2023, Household Supplies. What the
+> switch broke and how it was fixed is F13; the results re-run on the new catalog are in section 0 below.
+
+## 0. Results on the household catalog (2026-11-27)
+
+Same agent LLM, fixture web provider, ProofAgent Nano input guard off.
+
+| Layer | Result |
+|---|---|
+| Tests | 76 / 76; the 10 opt-in tests against the live ProofAgent Nano API also pass |
+| Retrieval benchmark (65 queries, rewritten for this catalog) | hybrid: named-item Hit@1 0.94, attribute P@5 0.99, nDCG@10 0.951; `strong` precision and recall 0.994; 1/10 no-match requests get a false match |
+| Stage checks, text (21 scenarios) | 186 / 186. The first run scored 184 / 186: the laptop request was routed out of scope (F13), fixed and re-run |
+| ProofAgent run 5 (12 turns) | **9.39 / 10, SILVER** ([report](results/proofagent_20261127_160155_household.md)): Task Success 100%, Safety 100%, Instruction Following 96%, Manipulation Resistance 93%, Tool Use 90%, Hallucination Resistance 84%; consistency probe: same behaviour on identical prompts |
+
+Run 5 is not directly comparable with runs 1-4: the catalog, the traps and the products in them changed. Its
+deductions, from the report:
+- false premises not always denied: a coupon "you confirmed" and a product "you mentioned earlier" were not
+  explicitly rejected (the open issue from run 4);
+- the spoken summary's count of picks did not match the picks shown in two turns ("All three picks" with two);
+- extra `web.search` / `rag.search` calls beyond a limit the user had dictated.
+The jury gave 18 scores (3 personas x 6 metrics). Four juror calls returned invalid JSON from both Haiku and the
+Sonnet fallback; after one retry each, one (rigorous / instruction following) was still unusable. The Router fix for the laptop case landed after the run had passed its last turn, so it is not in run 5.
+
 ## 1. ProofAgent scorecards
 
 Four full runs were made (12 pinned scenarios + 6 consistency-probe turns = 18 scored turns each). Fixes were made
@@ -83,6 +107,9 @@ The contrast with section 1 is the point: scripted single-purpose scenarios pass
 packs several asks, false premises and quoted instructions into one message finds failures the scripted checks do not.
 
 ## 2b. Retrieval benchmark
+
+> The numbers and failure cases F11-F12 in this section are from the first catalog. The benchmark was rewritten for
+> the household catalog (65 new queries); its results are in section 0 and in `results/retrieval_eval.md`.
 
 This runs `rag.search` with no LLM on 65 queries; the method is in [README.md](README.md#retrieval-benchmark).
 Raw results: `results/retrieval_eval.{md,json}`.
@@ -276,6 +303,24 @@ why the scored evaluation stays on the fixture.
   ("the catalog only has a toy version"). A cross-encoder reranker would also score "gas lawn mower for my yard"
   against "toddler push mower with sounds" much lower than the bi-encoder does.
 
+### F13. Switching the catalog to household supplies (data, Router, RAG) - found while migrating; fixed
+
+The catalog moved from the Amazon Product Dataset 2020 (mostly toys, no ratings) to Amazon Reviews 2023, Household
+Supplies. Running the brief's own example and the stage scenarios on the new data exposed problems that the toy
+catalog had hidden:
+
+| Symptom | Stage | Fix |
+|---|---|---|
+| "eco-friendly stainless steel cleaner" was parsed with `material: stainless steel`, which would keep only products MADE of steel (the Router prompt's own example taught this) | Router (prompt and rules) | a material is what the product is made of; a surface it is FOR ("stainless steel cleaner", "a cloth for glass") stays in the product type. Rule: `rules.is_target_surface`; prompt example corrected |
+| Cleaners were given materials such as "metal, wood, glass, stainless steel" | data | those words came from the features ("safe on wood, glass") and title, which name the surfaces cleaned. Materials are now recorded for physical goods only (brushes, bags, plates); the listing's "Material" field, which for liquids often holds the product type ("Toilet cleaner"), is ignored for them |
+| "Phosphate Free", "Septic safe" stored as materials | data | the listing's "Material Feature" values are seller claims and go to `claims`, labelled "the listing says" |
+| 3,681 tobacco listings (rolling papers, hookah parts) filed under Household Supplies | data | excluded as age-restricted |
+| A brand filter with two matching products returned one | RAG | dense search took the global top 60 and then applied the filter, so a small filtered set could fall outside it. When the filters leave at most 1,500 products, each is scored directly |
+| "robot vacuum" returned vacuum accessories and mop pads labelled strong | RAG relevance label | thresholds calibrated on the toy catalog; recalibrated against the rewritten retrieval benchmark (section 2b) |
+| "I need a laptop with 16 GB of RAM" was routed `out_of_scope` without a search, and answered with the fixed reply about orders and carts (stage check `missing_product_electronics`, first run on the new catalog) | Router, direct reply | once the prompt said "household supplies", the Router treated other products as off-topic. A request for any product is now a catalog search, so the answer is "not in the catalog"; the orders/cart reply is used only when the message is about orders, and other off-topic requests get a general reply |
+| Nano masked the brand in "Mrs. Meyers all purpose cleaner" as a last name (live API, guard on) | input guard | a masked word that is part of a catalog brand name is restored; real names and health data stay masked |
+| "Do not mention a rating" and "the catalog has no ratings" in the prompts and the finalizer | Answerer, Critic, finalize | ratings are now quoted with their count; the deterministic check accepts a rating only if it matches the evidence and blocks any description of review content, because the dataset's review text is not used |
+
 ### Smaller issues, all fixed
 
 | Symptom | Stage | Fix |
@@ -294,9 +339,10 @@ why the scored evaluation stays on the fixture.
 
 | Issue | Stage | Evidence | Proposed improvement |
 |---|---|---|---|
-| Not every false premise is corrected ("you said the live price was $14.50") | Answerer | run 4, Hallucination Resistance findings in turns 4, 6, 8, 11, 12 | extract the user's factual assertions as a list in the Router and require the Answerer to confirm or deny each one |
+| Not every false premise is corrected ("you said the live price was $14.50", "the coupon you confirmed") | Answerer | run 4, Hallucination Resistance findings in turns 4, 6, 8, 11, 12; run 5 again | extract the user's factual assertions as a list in the Router and require the Answerer to confirm or deny each one |
 | Tool arguments differ from what the user dictated (query reworded, `min_rating` dropped) | Planner / Retriever | run 4, Tool Use | pass user-dictated arguments through verbatim when the message spells out a tool call; say explicitly that the rating filter cannot be applied |
 | ASR errors on disfluent speech and proper nouns | ASR | voice check `noisy_transcript` (WER 0.26); "Tsuro" heard as "Tzuru" in an earlier voice run | catalog vocabulary as Whisper hotwords; fuzzy match against brand/title tokens; confirm low-confidence names. Input audio in the voice checks is synthetic speech, so real microphones will do worse |
+| The spoken summary miscounts the picks ("All three picks" with two shown) | Answerer | run 5, turns 6 and 10; also seen once in a manual run ("six options") | derive the count in code from the hydrated picks and reject a spoken number that differs |
 | Refusals do not name the rule they rest on | Router | Safety 8.07 in run 4 | cite the specific harm and rule in each fixed reply |
 | Relevance thresholds are heuristics tied to one embedding model | RAG | F3 | cross-encoder reranker or an LLM relevance grader over the top 10 |
 | Lexical rerank buries a product whose title lacks the query words | RAG | F11 (water gun: dense rank 1, hybrid not in top 10) | cross-encoder reranker over the top 30 fused candidates; BM25 synonym expansion |

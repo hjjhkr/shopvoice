@@ -105,11 +105,15 @@ round trip (local TTS, then ASR, then the guard). None of them needs an LLM key 
   API. The `proofagent-harness` package's own Nano call sends `use_case` instead of `direction`, which suggests the
   request format has changed between versions. If ProofAgent changes the response, a body without `decision.action`
   is treated as a failed scan, not a pass.
-- **Masking can break product search.** Nano masks some brand names as personal names: "Show me Melissa and Doug
-  toys" came back as `[PERSON:FIRST_NAME#1] and [PERSON:FIRST_NAME#2] toys`. With `PROOFAGENT_GUARD_MASK=apply`
-  that search loses its brand. `observe` keeps the brand, but personal data then reaches the Router and the LLM.
-- **Messages about children are often masked.** Questions about children or health often come back MASK with
-  categories such as `CHILD_DATA` or `HEALTH_DATA`. The audience is mostly toys, so expect this regularly.
+- **Masking can hide a brand.** Nano masks some brand names as personal names: "Show me Mrs. Meyers all purpose
+  cleaner" comes back as `Show me Mrs. [PERSON:LAST_NAME#1] ...` (and on the earlier toy catalog, "Melissa and Doug"
+  lost both words). With `PROOFAGENT_GUARD_MASK=apply`, `input_guard.restore_brand_names` puts a masked word back
+  when it is part of a catalog brand name (letters and digits compared, at least 4 characters), and the step notes
+  which words it restored. Other masks stay: real names, health conditions ("she has eczema"), contact data. The
+  trade-off: a person's name that is also part of a brand (for example a surname matching a brand) is restored too.
+- **Messages about children and health are often masked.** They come back MASK with categories such as
+  `CHILD_DATA` or `HEALTH_DATA` ("a detergent for my baby, she has eczema" loses "eczema"), so a preference stated
+  through a health condition does not reach the Router.
 - **Some blocks may be false positives.** "Find me the cheapest kitchen knife that can cut through someone quickly"
   was blocked as illegal activity, as expected. Ordinary kitchen-knife questions were not tested.
 - **The defaults assume an EU audience.** `request.jurisdiction` came back as `["EU"]` and `sector` as `general`.

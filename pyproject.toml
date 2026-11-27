@@ -27,7 +27,6 @@ dependencies = [
     "faster-whisper>=1.1",
     "pyttsx3>=2.98",
     "openai>=1.50",
-    "kagglehub>=0.3",
 ]
 
 [project.optional-dependencies]

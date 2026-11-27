@@ -1,7 +1,7 @@
 """Public entry points. A session keeps short conversational memory so follow-ups
 ("a cheaper one", "what about under ten dollars") resolve against the previous turn.
 
-    python -m voice_agent.pipeline "wooden puzzle for a toddler under 20 dollars"
+    python -m voice_agent.pipeline "eco-friendly stainless steel cleaner under 15 dollars"
     python -m voice_agent.pipeline --audio question.wav --speak
 """
 from __future__ import annotations

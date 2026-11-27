@@ -20,6 +20,7 @@ import pandas as pd
 from ..config import Settings, get_settings
 
 SEARCH_MODES = ("hybrid", "hybrid_rrf", "dense", "bm25")
+SMALL_POOL = 1500       # at or below this many products left by the filters, dense similarity is computed for all of them
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = set("a an the and or for with of to in on at by from is are be it this that i me my need want "
             "looking find recommend show get buy some any good best please under below over than less more "
@@ -43,8 +44,10 @@ def doc_text(row: pd.Series | dict) -> str:
         parts.append(f"Brand: {row['brand']}")
     if row.get("category"):
         parts.append(f"Category: {row['category']}")
-    if isinstance(row.get("recommended_age"), str):
-        parts.append(f"Manufacturer recommended age: {row['recommended_age']}")
+    for key, label in (("claims", "Listing claims"), ("ingredients", "Ingredients or materials"),
+                       ("recommended_age", "Recommended age")):
+        if isinstance(row.get(key), str) and row[key]:
+            parts.append(f"{label}: {row[key]}")
     return " \n".join(p for p in parts if p)[:2000]
 
 
@@ -112,6 +115,7 @@ def build_index(settings: Settings | None = None, batch: int = 256, limit: int |
             rating = _num(r["rating"])
             if rating is not None:
                 meta["rating"] = rating
+                meta["rating_count"] = int(r.get("rating_count") or 0)
             metadatas.append(meta)
         col.add(
             ids=chunk["doc_id"].tolist(),
@@ -136,9 +140,20 @@ class ProductStore:
         self._ids = self.df["doc_id"].tolist()
         self._pos = {d: i for i, d in enumerate(self._ids)}
         self._bm25 = BM25Okapi([tokenize(doc_text(r)) for _, r in self.df.iterrows()])
-        self._col = _client(self.settings).get_collection(
-            self.settings.collection, embedding_function=embedding_function(self.settings)
-        )
+        self._ef = embedding_function(self.settings)
+        self._col = _client(self.settings).get_collection(self.settings.collection, embedding_function=self._ef)
+
+    def _dense_within(self, query: str, ids: list[str]) -> list[tuple[str, float]]:
+        """Cosine similarity of the query to each of `ids`, highest first (same embeddings as the index)."""
+        import numpy as np
+
+        if not ids:
+            return []
+        q = np.asarray(self._ef([query])[0], dtype="float32")
+        got = self._col.get(ids=ids, include=["embeddings"])
+        emb = np.asarray(got["embeddings"], dtype="float32")
+        sims = emb @ q / (np.linalg.norm(emb, axis=1) * np.linalg.norm(q) + 1e-12)
+        return sorted(zip(got["ids"], (float(s) for s in sims)), key=lambda x: -x[1])
 
     # ---- metadata filtering -------------------------------------------------
     def _mask(self, max_price, min_price, brand, category, min_rating) -> pd.Series:
@@ -149,13 +164,13 @@ class ProductStore:
         if min_price is not None:
             mask &= df["price"] >= float(min_price)
         if brand:
-            b = norm_brand(brand)      # "Melissa and Doug" (ASR) == "Melissa & Doug" (catalog)
+            b = norm_brand(brand)      # "Arm and Hammer" (ASR) == "Arm & Hammer" (catalog)
             if b:   # manufacturer names recovered from the spec text may have lost their spaces, so compare both ways
                 mask &= (self._brand_norm.str.contains(b, regex=False)
                          | self._brand_norm.str.replace(" ", "").str.contains(b.replace(" ", ""), regex=False)
                          | self._title_norm.str.contains(f" {b} ", regex=False))
         if category:
-            # Users say "wooden puzzles"; the catalog says "Toys & Games > Puzzles > Pegged Puzzles". Every word
+            # Users say "dish soap"; the catalog says "... > Dishwashing > Dishwashing Liquid". Every word
             # of the requested category must occur in the category path or the title (singular/plural-insensitive).
             for token in tokenize(category):
                 stem = token[:-1] if len(token) > 3 and token.endswith("s") else token
@@ -196,8 +211,13 @@ class ProductStore:
             where_parts.append({"price": {"$gte": float(min_price)}})
         where = None if not where_parts else where_parts[0] if len(where_parts) == 1 else {"$and": where_parts}
         n = min(len(self._ids), max(60, top_k * 12))
-        res = self._col.query(query_texts=[query], n_results=n, where=where, include=["distances"])
-        dense = [(d, 1.0 - dist) for d, dist in zip(res["ids"][0], res["distances"][0]) if d in allowed]
+        if len(allowed) <= SMALL_POOL:
+            # The filters leave few products (a brand, a rating floor, a tight budget). The global top-n of a
+            # vector query can miss all of them, so every allowed product is scored directly instead.
+            dense = self._dense_within(query, sorted(allowed))[:n]
+        else:
+            res = self._col.query(query_texts=[query], n_results=n, where=where, include=["distances"])
+            dense = [(d, 1.0 - dist) for d, dist in zip(res["ids"][0], res["distances"][0]) if d in allowed]
 
         # sparse
         q_tokens = tokenize(query)
@@ -239,21 +259,57 @@ class ProductStore:
     def _relevance(self, doc_id: str, q_tokens: list[str], similarity: float | None, brand_matched: bool = False) -> str:
         """'strong' = confidently the kind of product asked for. Hybrid search always returns
         its nearest neighbours, so the agent needs this to tell 'no such product' from a match.
-        Thresholds are calibrated for the default MiniLM embeddings (RAG_STRONG_SIM / RAG_WEAK_SIM)."""
+        Thresholds are calibrated for the default MiniLM embeddings (RAG_STRONG_SIM / RAG_WEAK_SIM) on the
+        household catalog with eval/run_retrieval_eval.py (no-match false-strong rate, strong precision/recall).
+
+        Similarity says "same neighbourhood", not "same product": a vacuum brush and robot-mop pads sit next to
+        "robot vacuum", espresso cups next to "espresso machine". So the words of the request must also be in
+        the product. Word matching ignores plural endings (battery/batteries, towel/towels).
+            in_title   = share of the query words that are in the title
+            in_listing = share of the query words anywhere in the listing (title, features, description,
+                         brand, category), so "ant killer" accepts "Multi Insect Killer ... kills ants"
+        strong when
+            very similar (sim >= strong + 0.10) and at least half the query words are in the listing, or
+            similar (sim >= strong) and the title has more than half the query words (for "robot vacuum" a
+                title with only "vacuum" is not enough), or some of them and the listing has all, or
+            somewhat similar (sim >= weak) and the title has nearly all query words, or
+            the user named a brand, the product has it, and it is somewhat similar or its title names
+                the requested product type (brand-X "cleaner" -> "Brand-X Cooktop Cleaner", whatever the sim).
+        """
         import os
         strong = float(os.environ.get("RAG_STRONG_SIM", "0.45"))
         weak = float(os.environ.get("RAG_WEAK_SIM", "0.35"))
         sim = similarity or 0.0
-        title_tokens = set(tokenize(self.df.at[doc_id, "title"]))
-        coverage = (sum(t in title_tokens for t in q_tokens) / len(q_tokens)) if q_tokens else 0.0
-        # A high similarity alone is not enough: "wooden maraca" is close to "wooden puzzle" in
-        # embedding space. Unless the similarity is very high, the title must share query terms.
-        if sim >= strong + 0.10 or (sim >= strong and coverage >= 0.3) or (sim >= weak and coverage >= 0.66):
+
+        def stem(t: str) -> str:              # plural-insensitive: batteries -> battery, towels -> towel
+            if len(t) > 4 and t.endswith("ies"):
+                return t[:-3] + "y"
+            return t[:-1] if len(t) > 3 and t.endswith("s") and not t.endswith("ss") else t
+
+        def share(words: list[str], vocab: set[str]) -> float:
+            return sum(w in vocab for w in words) / len(words) if words else 0.0
+
+        row = self.df.loc[doc_id]
+        title = {stem(t) for t in tokenize(row["title"])}
+        listing = title | {stem(t) for t in tokenize(doc_text(row))}
+        query = [stem(t) for t in q_tokens]
+        in_title = share(query, title)
+        in_listing = share(query, listing) if query else 1.0
+        if sim >= strong + 0.10 and in_listing >= 0.5:
             return "strong"
-        if brand_matched and sim >= weak:
+        if sim >= strong and (in_title > 0.5 or (in_title >= 0.3 and in_listing == 1.0)):
+            return "strong"
+        if sim >= weak and in_title >= 0.66:
+            return "strong"
+        if brand_matched:
             # The result already satisfies a brand the user named, which is strong evidence by itself. Without
-            # this, "a LEGO set under $5" flipped between match and no-match as the query wording varied.
-            return "strong"
+            # this, "a brand-X product under $5" flipped between match and no-match as the query wording varied.
+            # Within one brand the embedding of a one-word query ("cleaner") is a poor guide, so a title that
+            # names the requested type also counts.
+            brand = {stem(t) for t in tokenize(row["brand"] if isinstance(row["brand"], str) else "")}
+            rest = [t for t in query if t not in brand]
+            if sim >= weak or (rest and share(rest, title) >= 0.5):
+                return "strong"
         return "weak"
 
     def get(self, doc_id: str) -> dict[str, Any] | None:
@@ -268,19 +324,25 @@ class ProductStore:
             "price": _num(r["price"]),
             "price_max": _num(r["price_max"]),
             "rating": _num(r["rating"]),
+            "rating_count": int(r["rating_count"]) if _num(r.get("rating_count")) is not None else None,
             "brand": r["brand"] if isinstance(r["brand"], str) else None,
             "brand_inferred": bool(r["brand_inferred"]),
             "brand_source": r.get("brand_source"),
             "recommended_age": r["recommended_age"] if isinstance(r.get("recommended_age"), str) else None,
             "age_min_years": _num(r.get("age_min_years")),
             "ingredients": r["ingredients"] if isinstance(r["ingredients"], str) else None,
+            "claims": r["claims"] if isinstance(r.get("claims"), str) else None,
+            "scent": r["scent"] if isinstance(r.get("scent"), str) else None,
+            "form": r["form"] if isinstance(r.get("form"), str) else None,
+            "size": r["size"] if isinstance(r.get("size"), str) else None,
             "category": r["category"] or None,
             "features": (r["features"] or "")[:500],
             "price_per_oz": _num(r["price_per_oz"]),
+            "price_per_count": _num(r.get("price_per_count")),
             "url": r["url"] if isinstance(r["url"], str) else None,
             "score": round(score, 5) if score is not None else None,
             "similarity": round(similarity, 4) if similarity is not None else None,
-            "source": "amazon-product-dataset-2020",
+            "source": r.get("source") or "amazon-reviews-2023/health-and-household",
         }
 
 

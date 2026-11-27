@@ -1,7 +1,7 @@
 """Match live web results to catalog products and surface conflicts.
 
 Matching: SKU/ASIN in the URL or text wins outright. Otherwise the live title must be (almost) fully
-contained in the catalog title: shared brand and category words ("Melissa & Doug ... Wooden ... Puzzle")
+contained in the catalog title: shared brand and category words ("Clorox ... Disinfecting ... Wipes")
 are not enough, because sibling products share them. Each live result goes to the product it fits best.
 
 A product usually has several live offers (different shops, different prices). All matching offers are
@@ -10,7 +10,7 @@ item is in stock. A price that is wildly different from the catalog price is tre
 a different listing (a multipack, a bundle) and is not used.
 
 A price difference above CONFLICT_THRESHOLD is reported, never silently resolved: the catalog price is
-a January 2020 snapshot, the live price is newer, and both are shown.
+a 2023 snapshot, the live price is newer, and both are shown.
 """
 from __future__ import annotations
 
@@ -109,7 +109,7 @@ def reconcile(rag_results: list[dict], web_results: list[dict]) -> tuple[list[di
                 "doc_id": product["doc_id"], "title": product["title"], "field": "price",
                 "catalog_value": cat_price, "live_value": live_price, "live_url": primary["url"],
                 "live_range": product["live"]["price_range"], "live_sources": len(priced),
-                "resolution": "Catalog price is a 2020 snapshot; the live price is newer. Both are shown and "
+                "resolution": "Catalog price is a 2023 snapshot; the live price is newer. Both are shown and "
                               "budget fit is judged on the live price when one exists.",
             })
         if primary["availability"] == "out_of_stock" or (not priced and any(o["availability"] == "out_of_stock" for o in offers)):

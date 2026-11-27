@@ -54,7 +54,7 @@ these, so the wording differs between runs with different seeds.
 | `sv_catalog_vs_live_conflict` | MCP tool calls, conflicting private and live information | edge case |
 | `sv_budget_pressure` | products outside the budget, social pressure to misstate prices | adversarial |
 | `sv_missing_product` | missing / unavailable products | edge case |
-| `sv_unsupported_claims` | ratings, certifications, germ-kill and best-seller claims | adversarial |
+| `sv_unsupported_claims` | invented review content, wrong ratings, listing claims presented as certifications, invented ingredients | adversarial |
 | `sv_ambiguous_request` | ambiguous requests | edge case |
 | `sv_poisoned_tool_result` | incorrect tool results, indirect prompt injection | adversarial |
 | `sv_phantom_actions` | claiming actions without a tool (orders, cart, coupons) | adversarial |
@@ -87,18 +87,17 @@ queries and relevance criteria are in [retrieval/queries.yaml](retrieval/queries
 
 | Type | n | Relevance | Metrics |
 |---|---|---|---|
-| Named known item ("Melissa and Doug safari chunky puzzle") | 22 | the product's doc_id, found by title search and checked by hand | Hit@1, Hit@5, MRR@10 |
-| Described known item ("purple plush cat with a unicorn horn that makes a sound") | 9 | same; the description is taken from the product's feature text, so it shares few words with the title | Hit@1, Hit@5, MRR@10 |
-| Attribute ("wooden puzzle for a toddler", max $20) | 24 | a rule over title, text, category and age: grade 1 = the kind of product asked for, grade 2 = also meets the preferences (e.g. age). Filters are applied as the Planner applies them | P@5 (over min(5, relevant in catalog)), nDCG@10 against the best possible ordering |
-| No match ("gas lawn mower for my yard") | 10 | nothing relevant exists; only toys share the words | false match = a `strong` label in the top 5 |
+| Named known item ("Seventh Generation free and clear detergent") | 16 | the product's doc_id, found by title search and checked by hand | Hit@1, Hit@5, MRR@10 |
+| Described known item ("smiley face sponge that gets firm in cold water and soft in warm water") | 5 | same; the description is taken from the product's feature text, so it shares few words with the title | Hit@1, Hit@5, MRR@10 |
+| Attribute ("stainless steel cleaner", max $15) | 34 | a rule over title, text and category: grade 1 = the kind of product asked for, grade 2 = also meets the preferences (e.g. age). Filters are applied as the Planner applies them | P@5 (over min(5, relevant in catalog)), nDCG@10 against the best possible ordering |
+| No match ("robot vacuum under $200") | 10 | nothing relevant exists; most share words with real products (robot-mop pads, carpet shampoo) | false match = a `strong` label in the top 5 |
 
 **Why rules, not hand-picked lists.** Relevance never comes from a retriever's output, because then a method would
 be graded on its own picks. The criteria were written first. They were then **audited**: `--audit` lists every
-product that any mode put in its top 5 and the rules graded 0. Reading that list turned up 20 relevant products the
-first criteria had missed. For example, "Battery Powered" RC cars were excluded as parts, and magnetic tiles turned
-out to be filed under "Magnetic & Felt Playboards". The criteria were corrected, and every mode was re-scored with
-the corrected version. What is still graded 0 in any top 5 is genuinely off-target: pool floats for "water gun",
-replacement wheels for "kick scooter".
+product that any mode put in its top 5 and the rules graded 0. Reading that list turned up 11 relevant products the
+first criteria had missed, for example Clorox wipes whose title lacks "disinfecting", an oven-cleaning paste, and
+"Plasticless" paper straws. The criteria were corrected, and every mode was re-scored with
+the corrected version. What is still graded 0 in any top 5 is genuinely off-target.
 
 **Ablation.** `search(mode=...)` turns off one component at a time:
 - `dense`: vector similarity only.
@@ -107,7 +106,7 @@ replacement wheels for "kick scooter".
 - `hybrid`: the default, which the agent uses.
 
 Filters and relevance labels are identical in every mode. Besides the means, the report gives **paired** win/loss
-counts per attribute query. With 24 queries, a difference in the mean can come from one or two queries, and the
+counts per attribute query. With 34 queries, a difference in the mean can come from one or two queries, and the
 paired counts show whether it does.
 
 **Labels.** The agent only uses `strong` hits as evidence, so the report also scores the label:
@@ -119,7 +118,7 @@ paired counts show whether it does.
 
 ```bash
 python eval/run_retrieval_eval.py                       # all modes -> eval/results/retrieval_eval.{md,json}
-python eval/run_retrieval_eval.py --show water_gun      # top 10 per mode, with grades, for one query
+python eval/run_retrieval_eval.py --show oven_cleaner     # top 10 per mode, with grades, for one query
 python eval/run_retrieval_eval.py --audit               # top-5 products the criteria grade 0, for review
 ```
 
@@ -128,16 +127,16 @@ Results and the two failures traced end to end are in [FAILURE_ANALYSIS.md](FAIL
 ## Stage-level checks
 
 ProofAgent reports at the level of the conversation. To attribute a failure to a stage,
-[run_stage_checks.py](run_stage_checks.py) runs the 20 scenarios in [stage_scenarios.yaml](stage_scenarios.yaml)
+[run_stage_checks.py](run_stage_checks.py) runs the 21 scenarios in [stage_scenarios.yaml](stage_scenarios.yaml)
 and assigns every expectation to the stage responsible for it:
 
 | Stage | Example checks |
 |---|---|
 | ASR (voice mode) | word error rate of the transcript against what was said <= 0.15 |
-| Router | task label, extracted budget / brand, `wants_live_info`, unsafe flag |
+| Router | task label, extracted budget / brand / rating floor / preference, surface not taken as a material, `wants_live_info`, unsafe flag |
 | Planner | planned tools; tools that must not be called |
 | RAG/MCP | tool actually called, all evidence within budget, conflict detected, picks are the right product type |
-| Answerer / Critic | number of recommendations, every pick cites a retrieved doc_id, required and forbidden strings, no rating claim, critic says grounded |
+| Answerer / Critic | number of recommendations, every pick cites a retrieved doc_id, required and forbidden strings, all picks meet a rating floor, critic says grounded |
 | TTS | spoken summary <= 45 words; in voice mode audio produced and <= 15 s |
 
 Running it with `LLM_PROVIDER=rules` gives a deterministic baseline with no model; comparing that with an LLM run

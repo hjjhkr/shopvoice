@@ -22,12 +22,12 @@ Input schema:
   "type": "object",
   "required": ["query"],
   "properties": {
-    "query":      {"type": "string",  "description": "What to look for, e.g. 'wooden puzzle for toddlers'"},
+    "query":      {"type": "string",  "description": "What to look for, e.g. 'eco-friendly stainless steel cleaner'"},
     "top_k":      {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
     "max_price":  {"anyOf": [{"type": "number"}, {"type": "null"}], "description": "Budget ceiling in USD (inclusive)"},
     "min_price":  {"anyOf": [{"type": "number"}, {"type": "null"}], "description": "Price floor in USD (inclusive)"},
     "brand":      {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Brand name filter (case-insensitive)"},
-    "category":   {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Category substring, e.g. 'Toys & Games'"},
+    "category":   {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Category substring, e.g. 'Laundry' or 'Household Cleaning'"},
     "min_rating": {"anyOf": [{"type": "number"}, {"type": "null"}], "description": "Minimum star rating (0-5)"}
   }
 }
@@ -38,17 +38,19 @@ Response:
 ```json
 {
   "results": [{
-    "doc_id": "amz20-7bf4d392c47b",        "sku": "B000B9RHYC",
-    "title": "Melissa & Doug Safari Wooden Chunky Puzzle ...",
-    "price": 9.99, "price_max": null,      "rating": null,
-    "brand": "Melissa & Doug", "brand_inferred": true, "brand_source": "title",
-    "recommended_age": "24 months - 4 years", "age_min_years": 2.0,
-    "ingredients": "wooden",               "category": "Toys & Games > Puzzles > Pegged Puzzles",
-    "features": "8-PIECE WOODEN PUZZLE: ...", "price_per_oz": 0.62,
-    "url": "https://www.amazon.com/...",   "score": 0.04416, "similarity": 0.6746,
-    "relevance": "strong",                 "source": "amazon-product-dataset-2020"
+    "doc_id": "hh23-B09YX9D7HG",           "sku": "B09YX9D7HG",
+    "title": "Seventh Generation Liquid Laundry Detergent, Free & Clear, 60 Loads, USDA Certified 97% Biobased, 90 Fl Oz",
+    "price": 13.99, "price_max": null,     "rating": 4.6, "rating_count": 244,
+    "brand": "Seventh Generation", "brand_inferred": false, "brand_source": "brand",
+    "ingredients": null,                   "claims": "biobased, usda certified biobased, septic safe, hypoallergenic",
+    "scent": "Free & Clear", "form": "Laundry Detergent", "size": "90.0 Ounce",
+    "category": "Health & Household > Household Supplies > Laundry > Laundry Detergent > Liquid Detergent",
+    "features": "Seventh Generation Laundry Detergent lifts stubborn stains ...",
+    "price_per_oz": 0.155, "price_per_count": null,
+    "url": "https://www.amazon.com/dp/B09YX9D7HG", "score": 0.05204, "similarity": 0.7969,
+    "relevance": "strong",                 "source": "amazon-reviews-2023/health-and-household"
   }],
-  "meta": {"count": 1, "index": "amazon-product-dataset-2020"}
+  "meta": {"count": 1, "index": "amazon-reviews-2023/health-and-household"}
 }
 ```
 
@@ -111,9 +113,9 @@ Every call appends one line to `logs/mcp_tool_calls.jsonl` (secrets redacted):
 
 ```json
 {"ts": "2026-11-19T20:26:51.611+00:00", "tool": "web.search",
- "request": {"query": "LEGO Classic Creative Suitcase 10713 Building Kit (213 Pieces) price", "max_results": 5},
+ "request": {"query": "Seventh Generation Concentrated Laundry Detergent Free & Clear price", "max_results": 5},
  "response": {"count": 2, "cache_hit": false, "error": null},
- "sources": ["https://bricks.retailer.test/p/lego-classic-creative-suitcase-10713", "https://deals.spam.test/lego"],
+ "sources": ["https://home.retailer.test/p/seventh-generation-free-clear-detergent-40oz", "https://deals.spam.test/seventh-generation"],
  "provider": "fixture", "latency_ms": 0.3}
 ```
 

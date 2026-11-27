@@ -1,7 +1,7 @@
 # ShopVoice: agentic voice-to-voice assistant for product discovery
 
 A voice-to-voice, multi-agent shopping assistant. You ask a question out loud; it transcribes it, plans,
-retrieves grounded evidence from a private product catalog (Amazon Product Dataset 2020) through an MCP server,
+retrieves grounded evidence from a private catalog of 25,000 household supplies (Amazon Reviews 2023) through an MCP server,
 optionally compares with live web results, checks its own answer, and speaks a short recommendation while the screen
 shows the comparison table, citations and the full agent trace.
 
@@ -37,17 +37,17 @@ source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 
 # 2. configure: edit .env (LLM provider/model + key; optional web search key)
 
-# 3. data + index (downloads the public Kaggle dataset with kagglehub; about 3 minutes on CPU)
-./scripts/build_index.sh           # = python -m voice_agent.data.ingest && python -m voice_agent.rag.store --build
+# 3. data + index (streams the public Hugging Face metadata, then about 8 minutes of CPU embedding)
+./scripts/build_index.sh           # = download_hh2023 (once) + data.ingest + rag.store --build
 
 # 4. run
 ./scripts/run_ui.sh                # Streamlit UI at http://localhost:8501
-python -m voice_agent.pipeline "I need a wooden puzzle for a toddler under twenty dollars"
+python -m voice_agent.pipeline "Recommend an eco-friendly stainless steel cleaner under fifteen dollars"
 python -m voice_agent.pipeline --audio question.wav --speak
 python scripts/mcp_smoke.py        # MCP discovery + one call per tool
 
 # 5. evaluate
-python -m pytest                   # 69 tests, no LLM needed (+10 opt-in live ProofAgent Nano tests)
+python -m pytest                   # 76 tests, no LLM needed (+10 opt-in live ProofAgent Nano tests)
 python eval/run_retrieval_eval.py  # retrieval benchmark + ablation, no LLM (about 30 s)
 python eval/run_stage_checks.py    # stage-level checks (add --voice for TTS -> ASR -> agent -> TTS)
 python eval/run_proofagent.py      # ProofAgent scorecard -> eval/results/
@@ -80,70 +80,75 @@ embeddings and web search are swapped the same way (`ASR_PROVIDER`, `TTS_PROVIDE
 
 ## Data preprocessing and indexing
 
-**Source.** [Amazon Product Dataset 2020](https://www.kaggle.com/datasets/promptcloud/amazon-product-dataset-2020)
-(PromptCloud, 10,002 products crawled in January 2020). `voice_agent/data/ingest.py` downloads it and writes
-`data/processed/products.parquet`.
+**Source.** [Amazon Reviews 2023](https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023) (McAuley Lab;
+Hou et al., "Bridging Language and Items for Retrieval and Recommendation", arXiv:2403.03952, 2024), category
+Health & Household, sub-tree **Household Supplies**: cleaning, laundry, dishwashing, cleaning tools, paper and plastic,
+air fresheners, batteries, pest control. The course allowed this dataset in place of the Amazon Product Dataset 2020
+used at first; the 2020 file was 67% toys and had no ratings, brands or ingredients (kept in git history).
 
-**What the dataset really contains.** The brief's example (household cleaners with ratings and ingredients) does not
-match this file, so the pipeline is honest about it rather than inventing fields:
+`voice_agent/data/download_hh2023.py` streams the 2.5 GB category metadata once (about 3 minutes) and keeps only
+Household Supplies items that have a price, a title and at least 10 ratings: 58,218 of 797,563 products.
+`voice_agent/data/ingest.py` maps them to the project schema and writes `data/processed/products.parquet`:
 
-| Target field | In the raw data? | What the pipeline does |
+| Target field | Source | What the pipeline does |
 |---|---|---|
-| id, title, category, price | yes | cleaned; price ranges (`$44.00 - $54.95`) keep low and high |
-| features | yes (`About Product`) | boilerplate removed |
-| brand | **empty column** | recovered from the packed `Product Specification` / `Technical Details` text where it exists (`Manufacturer:` 729 products, `Brand Name` 183); otherwise inferred from the leading title token(s), flagged `brand_inferred` and marked in the UI |
-| recommended age (extra) | inside `Product Specification` | `Manufacturer recommended age` parsed for 5,899 products (62%), e.g. "36 months - 5 years"; this is what age-suitability statements are grounded in |
-| rating, reviews | **not present** | left null; the assistant says there are no ratings and never states one |
-| ingredients | **empty column** | material keywords found in the text (`wooden`, `bpa-free`, `non-toxic`, ...) |
-| sku | **empty column** | ASIN parsed from the product URL |
-| category mix | 67% Toys & Games; almost no household cleaning | all categories are indexed; `CATEGORY_REGEX` narrows the slice |
+| id, sku, url | `parent_asin` | `doc_id = hh23-<ASIN>`; url is the amazon.com product page |
+| title, category, price | `title`, `categories`, `price` (USD when crawled in 2023) | category path kept; the third level ("Laundry", "Household Cleaning") is the top category |
+| rating, rating count | `average_rating`, `rating_number` | used as given, never estimated: every product has both (median 378 ratings, mean 4.46 stars) |
+| brand | `details.Brand` (90%), `details.Manufacturer` (8.6%), `store` (1.4%) | the title is a last resort (0.1%, flagged `brand_inferred`) |
+| features, description | `features`, `description`, `details` | scent, item form, uses, volume, unit count and size are added to the indexed text |
+| listing claims (extra) | title, features, `details` "Material Feature" | "plant-based", "fragrance-free", "phosphate-free", "safer choice", ... for 38.5% of products. They are the seller's wording, so the assistant reports them as "the listing says", never as certifications |
+| ingredients | `details` keys naming ingredients | only **31 of 58,218** listings name any, so ingredients are effectively absent and the assistant says so. For physical goods (brushes, sponges, bags, plates) the field holds materials instead (48% of products); for cleaners it is left empty, because their titles and features name the surfaces they clean ("stainless steel cleaner"), not what they are made of |
+| unit price | `Item Volume`, `Item Weight`, `Unit Count`, `Size` | `price_per_oz` for 75% of products, `price_per_count` (pods, wipes, bags) for 30% |
+| reviews | review files (11 GB) | not used: the average rating and rating count come with the metadata, and the assistant never quotes review text |
 
-The empty columns were verified, not assumed: the file is 10,002 rows x 28 columns, the only version on Kaggle, and
-13 of the 28 columns contain no value at all (Brand Name, Asin, Sku, Ingredients, List Price, Stock, Product
-Description and six others); a search of every text column for "out of 5 stars" or review counts finds nothing. The
-brief lists these fields as examples ("metadata such as", "example response", optional `brand?` / `ingredients?`),
-so the schema keeps every one of them and leaves a value null where the data has none.
-
-Curation keeps products with a title, a parseable price and descriptive text: **9,513 products**.
-Unit normalisation: `price_per_oz = price / item weight` where a weight is listed (8,493 products).
-There is no `reviews.parquet` because the dataset has no reviews.
+Curation: Amazon files 3,681 tobacco listings (rolling papers, hookah parts) under Household Supplies; they are
+excluded as age-restricted. Repeat listings of one product are merged by title, and the **25,000 most-rated
+products** are kept (`MAX_PRODUCTS`): Paper & Plastic 6,859, Cleaning Tools 5,432, Household Cleaning 4,052,
+Batteries 2,594, Laundry 2,425, Lighters & Matches 1,159, Tissues & Toilet Paper 749, Air Fresheners 745,
+Dishwashing 487, Pest Control 214, other 284. Prices run from $0.85 to $759.99 (median $16.89).
 
 **Index.** `voice_agent/rag/store.py` embeds `title + features + description + brand + category` into a persistent
 Chroma collection (cosine). Embeddings default to all-MiniLM-L6-v2 running locally through onnxruntime
 (`EMBEDDING_PROVIDER=local`); Ollama and OpenAI embeddings are drop-in alternatives. Metadata stored per vector:
-price, brand, top category, sku, rating (when present).
+price, brand, top category, sku, rating, rating count.
 
 **Hybrid retrieval.**
 1. Metadata filters (price range, brand, category, rating) are applied to both retrievers. Numeric filters are pushed
-   down into Chroma; brand matching is case-, punctuation- and `&`/`and`-insensitive, so the spoken "Melissa and
-   Doug" matches the catalog's "Melissa & Doug".
+   down into Chroma; brand matching is case-, punctuation- and `&`/`and`-insensitive, so the spoken "Arm and
+   Hammer" matches the catalog's "Arm & Hammer". When the filters leave at most 1,500 products (a brand, a rating
+   floor, a tight budget), every one of them is scored by vector similarity, so a filtered match cannot be missed.
 2. Dense: Chroma vector search. Sparse: BM25 over the same text.
 3. Reciprocal rank fusion, then a light rerank by query-term coverage of the title.
 4. Each hit is labelled `relevance: strong | weak`. Vector search always returns nearest neighbours, so this label
    is how the agent tells "no such product" from a match. Only strong hits become evidence.
 
 **Retrieval quality.** `eval/run_retrieval_eval.py` benchmarks `rag.search` directly (no LLM) on 65 queries:
-- 22 that name a product and 9 that only describe it;
-- 24 attribute requests ("wooden puzzle for a toddler under $20"), where relevance is a rule over catalog fields,
-  written before any retrieval was run and then audited against every mode's top 5;
-- 10 requests for things the catalog does not sell.
+- 16 that name a product ("Seventh Generation free and clear detergent") and 5 that only describe it;
+- 34 attribute requests ("stainless steel cleaner under $15", "AA batteries rated 4.5 or more"), where relevance is
+  a rule over catalog fields, written before any retrieval was run and then audited against every mode's top 5;
+- 10 requests for things the catalog does not sell (robot vacuum, laptop, dog food, toothpaste, earbuds...), most of
+  which share words with real products (robot-mop pads, lawn-mower batteries, carpet shampoo, espresso cups).
 
 Each component is switched off in turn with `ProductStore.search(mode=...)`
 ([results](eval/results/retrieval_eval.md), method in [eval/README.md](eval/README.md#retrieval-benchmark)):
 
 | Mode | Named item Hit@1 | Described item Hit@5 | Attribute P@5 | Attribute nDCG@10 |
 |---|---|---|---|---|
-| dense only | 0.91 | 1.00 | 0.84 | 0.816 |
-| BM25 only | 1.00 | 1.00 | 0.87 | 0.786 |
-| hybrid (RRF), no rerank | 1.00 | 1.00 | 0.90 | 0.847 |
-| **hybrid + title rerank (used)** | **1.00** | **1.00** | **0.92** | **0.865** |
+| dense only | 0.69 | 0.60 | 0.91 | 0.866 |
+| BM25 only | 0.81 | 1.00 | 0.90 | 0.893 |
+| hybrid (RRF), no rerank | 0.75 | 0.80 | 0.99 | 0.931 |
+| **hybrid + title rerank (used)** | **0.94** | **0.80** | **0.99** | **0.951** |
 
-Per query, the hybrid wins 13 / loses 3 against dense and 12 / 4 against BM25 (nDCG@10). The rerank wins 11 /
-loses 3 against plain fusion. The `strong` label has precision 0.91 and recall 1.00 in the top 5. It has two known
-weaknesses, both traced end to end in [FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md) (F11, F12):
-- toy look-alikes are labelled strong for 2 of the 10 no-match requests (a toy coffee maker for "espresso
-  machine", a toy mower for "gas lawn mower");
-- "water gun for the pool" loses the Super Soaker that dense search ranks first.
+Per attribute query, the hybrid wins 15 / loses 2 against dense and 16 / 5 against BM25 (nDCG@10). BM25 alone is
+best on the 5 described items (long paraphrases with rare words); the hybrid is best everywhere else.
+
+The `strong` label decides "match" versus "not in the catalog". Its thresholds were recalibrated for this catalog
+(F13): similarity alone is no longer enough, the request's words must also be in the product, so "robot vacuum" no
+longer accepts a vacuum brush. Strong precision and recall in the top 5 are both 0.994 on attribute queries; no
+relevant product is ever left without a strong label; 1 of the 10 no-match requests still gets a false match
+("shampoo for dry hair" -> a fabric spray whose title says "like dry shampoo for clothes"). On 36 further
+queries kept out of the calibration, no real product lost its label and false matches dropped.
 
 ## LangGraph architecture
 
@@ -182,20 +187,20 @@ the execution log shown in the UI and written to `logs/agent_runs.jsonl`.
 | `tts` | speaks the summary (pyttsx3 offline or OpenAI) | none | summary capped at 45 words (about 15 s) |
 
 **Agentic RAG behaviours** (all visible in the step log):
-- *Self-correction*: no strong hit -> retry with a simpler query; rating filter impossible (no ratings in the data)
-  -> drop it and say so; brand filter matches nothing -> search by name and say results may be other brands.
+- *Self-correction*: no strong hit -> retry with a simpler query; rating floor that no match meets
+  -> drop it, say so and show the actual ratings; brand filter matches nothing -> search by name and say results may be other brands.
 - *Reconciliation*: a live result is matched to a catalog product by ASIN in the URL, then brand + title similarity,
   then title similarity. A price difference above 10%, or "out of stock", is recorded as a conflict and shown with
   both values and both sources; the live price is treated as newer. If the live price exceeds the budget the product
   is not recommended and the reason is listed.
 - *No match*: when nothing is strongly relevant the assistant says so and lists the closest items as non-matches.
-- *Named products*: a product the user asks about by name ("check the LEGO Creative Suitcase price") is looked up
+- *Named products*: a product the user asks about by name ("check the Seventh Generation Free & Clear price") is looked up
   without the budget filter and shown first with an explicit "above your budget" label when it is, next to the
   in-budget matches. An over-budget product is therefore never reported as "not in the catalog", and a request that
   mixes a search with a price check gets the same answer whichever way the Router labels it.
 - *Brand is hard*: when nothing of the requested brand fits, other brands are listed as non-matches, not recommended.
 - *Type and material verification*: similarity is not trusted alone. Evidence must contain the product's head noun
-  ("puzzle" for "wooden puzzle for toddlers"), which removes hits that share only an adjective; and when the user
+  ("cleaner" for "stainless steel cleaner for the fridge"), which removes hits that share only an adjective; and when the user
   names a material, either only products listing it are kept or the answer states that none of the options meets it.
 
 **Repeatability.** `LLM_SEED` (default 42) is passed to providers that accept a sampling seed, temperature is 0, and
@@ -256,7 +261,7 @@ caching, rate limiting and logging are in **[docs/MCP.md](docs/MCP.md)**.
 | Over-budget recommendations | Budget is re-applied to every `rag.search` call and re-checked by the critic |
 | Tool misuse | Client-side allow-list of the two tools; `web.search` only when the plan includes it; max 6 calls per turn; domain allow/block lists |
 | Secrets | Keys only in `.env` (git-ignored); every log line and every output passes `redact()` |
-| Stale data presented as current | Every answer states that prices are a January 2020 snapshot unless a live price is shown |
+| Stale data presented as current | Every answer states that prices are a 2023 snapshot unless a live price is shown |
 
 ## Evaluation
 
@@ -264,30 +269,30 @@ Methodology, scenarios and how to reproduce: **[eval/README.md](eval/README.md)*
 failures: **[eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)**.
 
 Four layers, all run against the complete pipeline (or, for retrieval, the component the agent calls):
-1. `pytest` (69 tests, plus 10 opt-in tests against the live ProofAgent Nano API): units plus end-to-end runs through the real MCP server with the LLM disabled.
+1. `pytest` (76 tests, plus 10 opt-in tests against the live ProofAgent Nano API): units plus end-to-end runs through the real MCP server with the LLM disabled.
 2. `eval/run_retrieval_eval.py`: retrieval benchmark of `rag.search` (65 queries) with an ablation of each
    component (see [Retrieval quality](#data-preprocessing-and-indexing)).
-3. `eval/run_stage_checks.py`: 20 scenarios whose expectations are attributed to a stage
+3. `eval/run_stage_checks.py`: 21 scenarios whose expectations are attributed to a stage
    (ASR, Router, Planner, RAG/MCP, Answerer, TTS), in text mode and in voice mode.
 4. `eval/run_proofagent.py`: the ProofAgent harness (`proofagent-harness`) with 12 project-specific adversarial
    scenarios in `eval/proofagent/traps/`, jury scoring on task success, hallucination resistance, tool use, safety,
    manipulation resistance and instruction following.
 
-Results with `claude-haiku-5-5` as the agent LLM (details, all four runs and the failure cases in
-[eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)):
+Results with `claude-haiku-5-5` as the agent LLM on the household catalog, 2026-11-27 (details, the earlier runs on
+the first catalog and the failure cases in [eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)):
 
 | Layer | Result |
 |---|---|
-| Tests | 47 / 47 |
-| Retrieval (hybrid, no LLM) | named-item Hit@1 1.00; attribute P@5 0.92, nDCG@10 0.865; 2/10 false matches |
-| Stage checks, text | 172 / 172 |
-| Stage checks, voice (TTS -> ASR -> agent -> TTS) | 211 / 212 (one ASR miss on disfluent speech) |
-| ProofAgent, best complete run (run 2) | 8.94 / 10, certification SILVER |
-| ProofAgent, latest run (run 4) | 7.78 / 10, NEEDS_ENHANCEMENT: five metrics at 8.1-9.4, Task Success cut from 9.12 to 2.74 by the harness's repeat-consistency rule |
+| Tests | 76 / 76 (+10 / 10 live ProofAgent Nano tests, opt-in) |
+| Retrieval (hybrid, no LLM) | named-item Hit@1 0.94; attribute P@5 0.99, nDCG@10 0.951; 1/10 false matches |
+| Stage checks, text | 186 / 186, 21 / 21 scenarios |
+| Stage checks, voice (TTS -> ASR -> agent -> TTS) | not re-run on the new catalog (211 / 212 on the first catalog) |
+| ProofAgent (12 turns, run 5) | 9.39 / 10, certification SILVER: Task Success 100%, Safety 100%, Instruction Following 96%, Manipulation Resistance 93%, Tool Use 90%, Hallucination Resistance 84% |
 
-The ProofAgent headline varied by more than a point between runs; the two defects behind the latest drop (one
-answer per multi-part request, and over-blocking of requests that quote injected text) were fixed afterwards and
-have not been re-scored.
+Runs 1-4 (7.78 to 8.94) were on the first catalog, so run 5 is not a like-for-like comparison. Its remaining
+deductions: false premises not always denied ("the coupon you confirmed"), spoken pick counts that do not match
+the picks shown, and extra tool calls beyond a limit the user set. All runs used the fixture web provider and the
+ProofAgent Nano input guard off.
 
 ## Logs
 
@@ -318,11 +323,13 @@ $0.3-1.4, most of it the stronger fallback judge.
 
 ## Limitations
 
-- The 2020 dataset has no ratings, reviews, brand or ingredient fields, and little outside toys and games; the
-  brief's cleaner example returns "no match" by design.
+- Ingredients are almost never listed (31 of 58,218 listings), so ingredient questions are answered with "not listed".
+  Listing claims ("eco-friendly", "non-toxic") are the seller's wording and are not verified against any certification
+  database. There is no review text: only the average rating and the rating count.
+- Prices are the 2023 crawl; the catalog is the 25,000 most-rated Household Supplies products with a price, so rarely
+  rated products are not in it.
 - Relevance labelling uses similarity thresholds calibrated for the default MiniLM embeddings
-  (`RAG_STRONG_SIM`, `RAG_WEAK_SIM`); another embedding model needs recalibration. It cannot tell a toy from the
-  real product ("gas lawn mower" -> a toy mower, labelled strong).
+  (`RAG_STRONG_SIM`, `RAG_WEAK_SIM`); another embedding model needs recalibration.
 - The retrieval benchmark has 65 queries, written and judged by the team. Differences of one or two queries
   between modes are within noise; the paired win/loss counts are the more reliable comparison.
 - Live price extraction parses search snippets, so it depends on what the search API returns: the same price
@@ -342,7 +349,8 @@ $0.3-1.4, most of it the stronger fallback judge.
 src/voice_agent/
   config.py  llm.py  schemas.py  safety.py  logging_utils.py  mcp_client.py  pipeline.py
   input_guard.py            ProofAgent Nano runtime input scan (before the Router)
-  data/ingest.py            raw CSV -> products.parquet
+  data/download_hh2023.py   streams Amazon Reviews 2023 metadata, keeps Household Supplies
+  data/ingest.py            metadata JSONL -> products.parquet
   rag/store.py              Chroma + BM25 hybrid search, index builder
   mcp_server/server.py      MCP server (rag.search, web.search);  web.py  providers, cache, rate limit
   graph/build.py nodes.py rules.py reconcile.py     LangGraph workflow

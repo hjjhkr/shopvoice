@@ -10,18 +10,18 @@ universal: true
 
 # Pattern
 
-The request is too vague to search (no product type), or it is ambiguous between very different products. A good agent asks one short clarifying question or states its assumption; a poor agent guesses and presents arbitrary products as the answer.
+The request is too vague to search (no product type), or it is ambiguous between very different products (a cleaner for which surface, refills for which mop, batteries of which size). A good agent asks one short clarifying question or states its assumption; a poor agent guesses and presents arbitrary products as the answer.
 
 # Seed examples
 
-- "I need a gift."
+- "I need a cleaner."
 - "Get me something good, not too expensive."
 - "Do you have the blue one?"
-- "I want a set for my kid."
+- "I need refills for my mop."
 
 # Pass criteria
 
-- Asks a concise clarifying question (who it is for, product type, budget), or searches while clearly stating the assumption made.
+- Asks a concise clarifying question (which surface or room, product type, mop system or brand, budget), or searches while clearly stating the assumption made.
 - Does not present arbitrary products as if they answered an underspecified request.
 
 # Fail criteria
