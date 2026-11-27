@@ -6,7 +6,8 @@ optionally compares with live web results, checks its own answer, and speaks a s
 shows the comparison table, citations and the full agent trace.
 
 ```
-Voice -> ASR -> Input guard (ProofAgent Nano) -> Router -> Planner -> Retriever (MCP: rag.search / web.search) -> Answerer <-> Critic -> TTS
+Voice -> ASR -> Input guard (ProofAgent API) -> Router -> Planner -> Retriever (MCP: rag.search / web.search,
+         each call and result checked over ProofAgent's MCP server) -> Answerer <-> Critic -> Output guard (ProofAgent API) -> TTS
                                                                   evaluated end to end with ProofAgent
 ```
 
@@ -22,7 +23,7 @@ results. `python scripts/refresh_showcase.py` re-records the runs shown in it.
 | MCP server with two tools | `src/voice_agent/mcp_server/`, [docs/MCP.md](docs/MCP.md) |
 | UI (Streamlit) | `src/voice_agent/ui/app.py` |
 | ProofAgent evaluation | `eval/`, [eval/README.md](eval/README.md), [eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md) |
-| ProofAgent Nano runtime input guardrail (optional, `PROOFAGENT_GUARD=on`) | `src/voice_agent/input_guard.py`, [docs/INPUT_GUARD.md](docs/INPUT_GUARD.md) |
+| ProofAgent Nano guardrails at input (API), during the run (MCP) and output (API) (optional, `PROOFAGENT_GUARD=on`) | `src/voice_agent/input_guard.py`, `src/voice_agent/runtime_guard.py`, [docs/INPUT_GUARD.md](docs/INPUT_GUARD.md) |
 | Prompt disclosure | [prompts/](prompts/README.md) |
 | Model-agnostic config | `.env.example`, `src/voice_agent/config.py`, `llm.py` |
 
@@ -47,7 +48,7 @@ python -m voice_agent.pipeline --audio question.wav --speak
 python scripts/mcp_smoke.py        # MCP discovery + one call per tool
 
 # 5. evaluate
-python -m pytest                   # 76 tests, no LLM needed (+10 opt-in live ProofAgent Nano tests)
+python -m pytest                   # 83 tests, no LLM needed (+10 opt-in live ProofAgent Nano tests)
 python eval/run_retrieval_eval.py  # retrieval benchmark + ablation, no LLM (about 30 s)
 python eval/run_stage_checks.py    # stage-level checks (add --voice for TTS -> ASR -> agent -> TTS)
 python eval/run_proofagent.py      # ProofAgent scorecard -> eval/results/
@@ -162,12 +163,14 @@ flowchart LR
     router -- product task --> planner[Planner<br/>sources + tool steps]
     planner --> retriever[Retriever<br/>agentic tool loop]
     retriever <--> mcp[(MCP server<br/>rag.search / web.search)]
+    retriever <-. check_tool_call / check_tool_result .-> pamcp[(ProofAgent<br/>MCP server)]
     retriever --> answerer[Answerer<br/>picks + spoken summary]
     answerer --> critic{Critic<br/>rules + LLM}
     critic -- revise once --> answerer
     critic -- approve / repair --> finalize[Finalize<br/>caveats + citations]
-    finalize --> tts[TTS]
-    direct --> tts
+    finalize --> oguard{Output guard<br/>ProofAgent Nano API}
+    direct --> oguard
+    oguard --> tts[TTS]
     tts --> out([Speech + screen])
 ```
 
@@ -180,10 +183,11 @@ the execution log shown in the UI and written to `logs/agent_runs.jsonl`.
 | `input_guard` | scans the transcript (typed or from ASR) with ProofAgent Nano `POST /v1/scan`; PASS / MASK continue, REVIEW / BLOCK stop; optional (`PROOFAGENT_GUARD`), see [docs/INPUT_GUARD.md](docs/INPUT_GUARD.md) | none | block, review or a failed scan goes straight to a fixed reply: no Router, LLM or MCP call; masked text replaces the transcript |
 | `router` | task, constraints (budget, brand, material, preferences), `wants_live_info`, safety flag; resolves follow-ups from history | `router.md` | pattern guardrail (`safety.check_input`) runs before the LLM; a spoken budget found by regex is never lost |
 | `planner` | chooses `rag.search` and, only for current price/availability, `web.search`; lists retrieval fields and comparison criteria; sees tools from MCP discovery | `planner.md` | always one catalog step; web step only when requested and configured; budget/brand copied into filters; max 4 steps |
-| `retriever` | LLM issues MCP tool calls (up to 3 rounds); self-corrects on empty results; reconciles live and catalog data | `retriever.md` | tool allow-list; hard constraints re-applied to every call; planned steps run even if the LLM skips them; tool text sanitised |
+| `retriever` | LLM issues MCP tool calls (up to 3 rounds); self-corrects on empty results; reconciles live and catalog data | `retriever.md` | tool allow-list; hard constraints re-applied to every call; planned steps run even if the LLM skips them; tool text sanitised; with the ProofAgent guard on, every call and result is checked over ProofAgent's MCP server (`check_tool_call`, `check_tool_result`) |
 | `answerer` | picks up to 3 products by `doc_id`, one-sentence reasons, <= 45-word spoken summary, caveats, follow-up question | `answerer.md` | title/price/rating/materials are copied from evidence by `doc_id`, never generated; unknown ids are dropped |
 | `critic` | grounding, constraints, conflicts, safety, quality | `critic.md` | deterministic checks (budget, cited ids, prices and ratings not in evidence, unsupported claims) |
 | `finalize` | after one failed revision, replaces the draft with an evidence-only template; adds mandatory caveats; builds citations | none | all of it |
+| `output_guard` | scans the final reply with ProofAgent Nano `POST /v1/scan` (`direction: output`); BLOCK / REVIEW withhold it, MASK uses the masked text with citations, titles and brands put back; fixed replies are not sent | none | optional (`PROOFAGENT_GUARD`), see [docs/INPUT_GUARD.md](docs/INPUT_GUARD.md) |
 | `tts` | speaks the summary (pyttsx3 offline or OpenAI) | none | summary capped at 45 words (about 15 s) |
 
 **Agentic RAG behaviours** (all visible in the step log):
@@ -255,7 +259,7 @@ caching, rate limiting and logging are in **[docs/MCP.md](docs/MCP.md)**.
 |---|---|
 | Unsafe chemical/product advice, harm | Two input layers before any LLM call: ProofAgent Nano (`input_guard`, when `PROOFAGENT_GUARD=on`), then the regex guardrail (`safety.check_input`) in the Router; plus the Router's safety flag; fixed refusal with a short safety note; no tools are called |
 | Prompt injection from the user | Same two layers; fixed reply; instructions never revealed |
-| Prompt injection from tool results | Instruction-like text is stripped from catalog and web text, the result is flagged, excluded from matching and never cited; prompts state that tool output is data |
+| Prompt injection from tool results | With the ProofAgent guard on, every result is checked over ProofAgent's MCP server first (`check_tool_result`; an injected result is withheld, clean ones in the same batch kept). Then: Instruction-like text is stripped from catalog and web text, the result is flagged, excluded from matching and never cited; prompts state that tool output is data |
 | Hallucinated products, prices, ratings | Product fields are copied from evidence by `doc_id`; the critic blocks prices and ratings that are not in evidence |
 | Unsupported claims | Pattern checks for germ-kill, medical, certification, absolute-safety and best-seller claims that the evidence does not contain |
 | Over-budget recommendations | Budget is re-applied to every `rag.search` call and re-checked by the critic |
@@ -269,7 +273,7 @@ Methodology, scenarios and how to reproduce: **[eval/README.md](eval/README.md)*
 failures: **[eval/FAILURE_ANALYSIS.md](eval/FAILURE_ANALYSIS.md)**.
 
 Four layers, all run against the complete pipeline (or, for retrieval, the component the agent calls):
-1. `pytest` (76 tests, plus 10 opt-in tests against the live ProofAgent Nano API): units plus end-to-end runs through the real MCP server with the LLM disabled.
+1. `pytest` (83 tests, plus 10 opt-in tests against the live ProofAgent Nano API): units plus end-to-end runs through the real MCP server with the LLM disabled.
 2. `eval/run_retrieval_eval.py`: retrieval benchmark of `rag.search` (65 queries) with an ablation of each
    component (see [Retrieval quality](#data-preprocessing-and-indexing)).
 3. `eval/run_stage_checks.py`: 21 scenarios whose expectations are attributed to a stage
@@ -283,7 +287,7 @@ the first catalog and the failure cases in [eval/FAILURE_ANALYSIS.md](eval/FAILU
 
 | Layer | Result |
 |---|---|
-| Tests | 76 / 76 (+10 / 10 live ProofAgent Nano tests, opt-in) |
+| Tests | 83 / 83 (+10 / 10 live ProofAgent Nano tests, opt-in) |
 | Retrieval (hybrid, no LLM) | named-item Hit@1 0.94; attribute P@5 0.99, nDCG@10 0.951; 1/10 false matches |
 | Stage checks, text | 186 / 186, 21 / 21 scenarios |
 | Stage checks, voice (TTS -> ASR -> agent -> TTS) | not re-run on the new catalog (211 / 212 on the first catalog) |
@@ -348,7 +352,8 @@ $0.3-1.4, most of it the stronger fallback judge.
 ```
 src/voice_agent/
   config.py  llm.py  schemas.py  safety.py  logging_utils.py  mcp_client.py  pipeline.py
-  input_guard.py            ProofAgent Nano runtime input scan (before the Router)
+  input_guard.py            ProofAgent Nano API scans: the user's message and the final reply
+  runtime_guard.py          ProofAgent Nano MCP checks of every tool call and tool result
   data/download_hh2023.py   streams Amazon Reviews 2023 metadata, keeps Household Supplies
   data/ingest.py            metadata JSONL -> products.parquet
   rag/store.py              Chroma + BM25 hybrid search, index builder
@@ -360,7 +365,7 @@ prompts/                    all prompts + mapping to nodes
 eval/                       ProofAgent config, scenarios, runners, results, failure analysis
   retrieval/queries.yaml    retrieval benchmark queries and relevance criteria
 docs/MCP.md                 tool schemas
-docs/INPUT_GUARD.md         ProofAgent Nano input guardrail: setup, contract, limitations
+docs/INPUT_GUARD.md         ProofAgent Nano guardrails (input, runtime MCP, output): setup, contract, limitations
 scripts/                    setup, build_index, run_mcp, run_ui, run_eval (.sh and .ps1), mcp_smoke.py
 tests/                      pytest
 ```

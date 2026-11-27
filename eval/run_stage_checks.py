@@ -22,6 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("WEB_SEARCH_PROVIDER", "fixture")      # reproducible live results
+os.environ.setdefault("PROOFAGENT_GUARD", "off")        # do not spend ProofAgent Nano quota unless asked (PROOFAGENT_GUARD=on)
 
 
 def wer(reference: str, hypothesis: str) -> float:

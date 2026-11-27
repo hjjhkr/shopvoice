@@ -15,10 +15,11 @@ from typing import Annotated, Any, TypedDict
 
 from ..catalog import CATALOG_NAME, PRICE_SNAPSHOT
 from ..config import get_settings
-from ..input_guard import log_record, scan_input
+from ..input_guard import log_record, restore_citations, scan, scan_input
 from ..llm import call_structured, get_chat_model, llm_enabled, load_prompt, render
 from ..logging_utils import log_event
 from ..mcp_client import get_mcp_client, llm_tool_name
+from ..runtime_guard import GuardedToolClient
 from ..safety import (CHEMICAL_SAFETY_NOTE, INJECTION_REPLY, REFUSAL, _is_denied, check_input, check_output,
                       sanitize_tool_text, unsupported_claims)
 from ..schemas import AnswerDraft, Critique, Intent, Pick, Plan, ToolStep
@@ -43,6 +44,7 @@ class AgentState(TypedDict, total=False):
     # working state
     asr: dict
     input_scan: dict
+    output_scan: dict
     input_guard_stop: bool
     intent: dict
     direct_reply: str
@@ -158,6 +160,54 @@ def input_guard_node(state: AgentState) -> dict:
 
 def route_after_input_guard(state: AgentState) -> str:
     return "respond_direct" if state.get("input_guard_stop") else "router"
+
+
+# ================================================================ Output guard (ProofAgent Nano, API)
+OUTPUT_BLOCK_REPLY = ("I can't give that answer: the output safety check stopped it before it was read out. "
+                      "Please ask again, or ask about a different product.")
+OUTPUT_ERROR_REPLY = ("The output safety check is unavailable right now, so I stopped before reading out the answer. "
+                      "Please try again in a moment.")
+_FIXED_TASKS = {"unsafe", "clarification_needed", "chitchat", "out_of_scope"}
+
+
+def output_guard_node(state: AgentState) -> dict:
+    """Scans the final reply with ProofAgent Nano (POST /v1/scan, direction=output) before it is shown and spoken.
+    BLOCK / REVIEW replace the answer with a safe reply; MASK uses the masked text with citations put back. Fixed
+    replies (refusals, clarifications, the input guard's own replies) are ShopVoice's constant wording and are not sent."""
+    t0 = time.perf_counter()
+    text = state.get("final_text") or ""
+    if state.get("input_guard_stop") or (state.get("intent") or {}).get("task") in _FIXED_TASKS or not text.strip():
+        return {"steps": _step("output_guard", t0, "fixed wording: not scanned", scan={"source": "skipped"})}
+    g = scan(text, "output")
+    if g.source != "disabled":
+        log_event("proofagent_guard", {"checkpoint": "output", **log_record(g, text)})
+    label = {"proofagent_nano": "ProofAgent Nano (live API)", "mock": "MOCKED ProofAgent response (test only)",
+             "disabled": "ProofAgent output scan off", "error": "ProofAgent output scan FAILED (no ProofAgent verdict)"}[g.source]
+    verdict = f"{g.action} -> {g.decision}" if g.action else g.decision
+    summary = f"{label}: {verdict}" + (f" ({g.top_risk})" if g.top_risk else "") + (f"; {g.error}" if g.error else "")
+    scan_info = {k: v for k, v in g.to_dict().items() if k != "text"}
+    out: dict[str, Any] = {"output_scan": scan_info}
+    guards = []
+    if g.decision in ("block", "review"):
+        reply = OUTPUT_ERROR_REPLY if g.source == "error" else OUTPUT_BLOCK_REPLY
+        answer = dict(state.get("answer") or {}, recommendations=[], caveats=[], follow_up_question="")
+        out.update(final_text=reply, spoken_summary=reply, citations=[], answer=answer)
+        guards.append(_guard("blocked", f"{label} · {g.action or 'error'}",
+                             (g.summary or g.note or g.error or "") + " The drafted answer was not shown or spoken.",
+                             g.top_risk or g.action or "scan_unavailable"))
+    elif g.masked:
+        public = [x for e in (state.get("evidence") or []) for x in (e.get("title"), e.get("brand"), (e.get("live") or {}).get("title")) if x]
+        final, extra = restore_citations(text, g.text, public)      # product titles and brands are catalog data, not PII
+        if extra:
+            g.note = (g.note + " " if g.note else "") + f"Restored as catalog text: {', '.join(extra)}"
+            scan_info["note"] = g.note
+        out.update(final_text=final, spoken_summary=_trim_spoken(final.split("\n\n", 1)[0]))
+        guards.append(_guard("sanitised", f"{label} · {g.action}", "Personal data in the reply was masked. " + (g.note or ""),
+                             g.top_risk or "pii"))
+    elif g.source == "error":
+        guards.append(_guard("flagged", label, g.note, "scan_unavailable"))
+    out["steps"] = _step("output_guard", t0, summary, scan=scan_info, source_label=label, guard=guards)
+    return out
 
 
 # ========================================================================= Router
@@ -491,7 +541,8 @@ def _compact(tool: str, out: dict) -> str:
 
 def retriever_node(state: AgentState) -> dict:
     t0 = time.perf_counter()
-    client = get_mcp_client()
+    pa_events: list[dict] = []          # ProofAgent MCP checks (check_tool_call / check_tool_result) for this turn
+    client = GuardedToolClient(get_mcp_client(), pa_events)
     intent, plan = state["intent"], state["plan"]
     user_constraints = intent["constraints"]
     constraints = user_constraints
@@ -715,12 +766,24 @@ def retriever_node(state: AgentState) -> dict:
                              f"The model asked for {len(denied)} web.search call(s) that the approved plan does not allow; they were not run."))
     guards += [_guard("constraint", "Constraint verification (code)", note) for note in relaxations]
     guards += [_guard("constraint", "Budget check on live price (code)", e["budget_note"]) for e in evidence if e.get("budget_note")]
+    for ev in pa_events:
+        label = f"ProofAgent MCP · {ev['mcp_tool']} ({ev['tool']})"
+        if ev["checkpoint"] == "tool_call" and ev["decision"] == "stop":
+            guards.append(_guard("blocked", label, f"{ev['action']}: {ev['reason']} The call was not run.", "tool_call"))
+        elif ev["checkpoint"] == "tool_result" and ev.get("results_out", 0) < ev.get("results_in", 0):
+            guards.append(_guard("sanitised", label, f"{ev['action']}: {ev['reason']} {ev['results_in'] - ev['results_out']} of "
+                                 f"{ev['results_in']} result(s) withheld" + (f": {', '.join(ev['withheld'])}" if ev.get("withheld") else "")
+                                 + ".", "prompt_injection"))
+        elif ev["decision"] == "mask":
+            guards.append(_guard("sanitised", label, f"{ev['action']}: {ev['reason']} Masked text used; product links and ids kept.", "pii"))
     summary = (f"{len(calls)} tool call(s) via {mode}: {len(evidence)} grounded product(s), {len(web)} live result(s), "
-               f"{len(conflicts)} conflict(s)" + (f", {len(near_misses)} near-miss(es) only" if near_misses else ""))
+               f"{len(conflicts)} conflict(s)" + (f", {len(near_misses)} near-miss(es) only" if near_misses else "")
+               + (f"; {len(pa_events)} ProofAgent MCP check(s)" if pa_events else ""))
     return {"tool_calls": calls, "evidence": evidence, "near_misses": near_misses, "live_results": unmatched,
             "conflicts": conflicts, "relaxations": relaxations, "spoken_notes": spoken_notes,
             "steps": _step("retriever", t0, summary, mode=mode, calls=calls, conflicts=conflicts, errors=errors,
-                           relaxations=relaxations, guard=guards)}
+                           relaxations=relaxations, guard=guards,
+                           proofagent_mcp=[{k: v for k, v in ev.items() if k != "use_this"} for ev in pa_events])}
 
 
 # ======================================================================= Answerer

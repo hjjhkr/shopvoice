@@ -23,6 +23,7 @@ from voice_agent.graph.build import mermaid
 from voice_agent.graph.nodes import web_available
 from voice_agent.llm import llm_status
 from voice_agent.pipeline import AgentSession
+from voice_agent.runtime_guard import checkpoints as proofagent_checkpoints, last_usage
 
 st.set_page_config(page_title="ShopVoice · voice product discovery", page_icon="🎙", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -40,7 +41,7 @@ EXAMPLES = [
 # node id -> (label, what it does)
 STAGES = {
     "asr": ("ASR", "speech to text"),
-    "input_guard": ("Input guard", "ProofAgent Nano scan, before the Router"),
+    "input_guard": ("Input guard", "ProofAgent Nano API scan of the message"),
     "router": ("Router", "intent, constraints, safety"),
     "planner": ("Planner", "which tools, which filters"),
     "retriever": ("Retriever", "MCP tool calls, reconcile"),
@@ -48,9 +49,10 @@ STAGES = {
     "critic": ("Critic", "grounding and safety review"),
     "finalize": ("Finalize", "caveats, citations, repair"),
     "respond_direct": ("Direct reply", "fixed wording, no tools"),
+    "output_guard": ("Output guard", "ProofAgent Nano API scan of the reply"),
     "tts": ("TTS", "text to speech"),
 }
-MAIN = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
+MAIN = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "output_guard", "tts"]
 TOOL_PATH = ["planner", "retriever", "answerer", "critic", "finalize"]
 
 ROUTES_TOOLS = {
@@ -227,7 +229,7 @@ def node_status(events: list[tuple[str, dict]], running: str | None = None) -> d
         prev = status.get(node, {"ms": 0, "n": 0, "guards": []})
         gs = prev["guards"] + guards_of(update)
         state = "done"
-        if any(g["action"] == "blocked" for g in gs) and node in ("router", "input_guard"):
+        if any(g["action"] == "blocked" for g in gs) and node in ("router", "input_guard", "output_guard"):
             state = "block"
         elif any(g["action"] == "diverted" for g in gs):
             state = "divert"
@@ -249,7 +251,7 @@ def block_info(events: list[tuple[str, dict]]) -> dict | None:
     """The guard event that stopped or diverted the whole request, with the step that raised it."""
     for i, (node, update) in enumerate(events, 1):
         for g in guards_of(update):
-            if (node == "router" and g["action"] in ("blocked", "diverted")) or (node == "input_guard" and g["action"] == "blocked"):
+            if (node == "router" and g["action"] in ("blocked", "diverted")) or (node in ("input_guard", "output_guard") and g["action"] == "blocked"):
                 return {**g, "step": i, "node": node}
     return None
 
@@ -297,9 +299,11 @@ def banner_html(info: dict | None) -> str:
                 f'<div class="h">Request blocked at step {info["step"]} · {label}</div>'
                 f'<div class="m">Blocked by <b>{esc(info["mechanism"])}</b>'
                 f'{" · category <code>" + esc(info["category"]) + "</code>" if info.get("category") else ""}. {esc(info["detail"])}</div>'
-                f'<div class="s">Not executed because of this block: {"Router (no LLM call), " if info["node"] == "input_guard" else ""}'
-                f'Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize. '
-                f'The reply below is fixed wording.</div></div>')
+                + (f'<div class="s">The drafted answer was withheld: it is not shown or spoken. '
+                   f'The reply below is fixed wording.</div></div>' if info["node"] == "output_guard" else
+                   f'<div class="s">Not executed because of this block: {"Router (no LLM call), " if info["node"] == "input_guard" else ""}'
+                   f'Planner, Retriever (no MCP tool call), Answerer, Critic, Finalize. '
+                   f'The reply below is fixed wording.</div></div>'))
     return (f'<div class="sv-banner divert"><div class="ic">↪</div>'
             f'<div class="h">Request diverted at step {info["step"]} · {label}</div>'
             f'<div class="m">Route <code>{esc(info.get("category") or "direct")}</code> · {esc(info["detail"])}</div>'
@@ -383,7 +387,7 @@ def checkpoints(events: list[tuple[str, dict]], result: dict) -> list[dict]:
         if node not in ran:
             row(step, name, "PENDING", "skip", "This step has not run yet.")
             return
-        hits = [g for g in by.get(node, []) if g["action"] in actions]
+        hits = [g for g in by.get(node, []) if g["action"] in actions and not g["mechanism"].startswith("ProofAgent MCP")]
         if not hits:
             row(step, name, ok_label, "ok", ok_text)
             return
@@ -399,6 +403,9 @@ def checkpoints(events: list[tuple[str, dict]], result: dict) -> list[dict]:
           f"{len(calls)} call(s), all to allowed tools, with hard constraints re-applied in code.")
     later("4 · Retriever", "retriever", "Tool-output sanitiser", ("sanitised",),
           "No instruction-like text found in tool results.", "CLEAN")
+    pa = next(((last_step(u).get("detail") or {}).get("proofagent_mcp") for n, u in events if n == "retriever"), None)
+    if "retriever" in ran and pa is not None:
+        row(*proofagent_mcp_row(pa))
     later("4 · Retriever", "retriever", "Constraint verification (budget, brand, type, material)", ("constraint",),
           "Every kept product satisfies the stated constraints.")
     later("6 · Critic", "critic", "Grounding and safety review of the draft", ("rejected",),
@@ -409,7 +416,50 @@ def checkpoints(events: list[tuple[str, dict]], result: dict) -> list[dict]:
     row("7 · Finalize" if "finalize" in ran else "Direct reply", "Output redaction (secrets never shown or logged)",
         "APPLIED" if done else "NOT REACHED", "ok" if done else "skip",
         "Every reply and log line passes the redactor." if done else "Not run yet.")
+    if "output_guard" in ran:
+        row(*output_guard_row(result.get("output_scan") or {}, any(g["action"] == "blocked" for g in by.get("output_guard", []))))
     return rows
+
+
+def proofagent_mcp_row(events: list[dict]) -> tuple[str, str, str, str, str]:
+    """Checkpoint row for ProofAgent's MCP checks of every tool call and tool result in the Retriever."""
+    step, name = "4 · Retriever", "ProofAgent MCP: check_tool_call / check_tool_result"
+    if not events:
+        return (step, name, "OFF", "skip", "Runtime checks off (PROOFAGENT_GUARD / PROOFAGENT_GUARD_CHECKPOINTS), or no tool was called.")
+    calls = [e for e in events if e["checkpoint"] == "tool_call"]
+    results = [e for e in events if e["checkpoint"] == "tool_result"]
+    stopped = [e for e in calls if e["decision"] == "stop"]
+    withheld = sum(e.get("results_in", 0) - e.get("results_out", 0) for e in results)
+    errors = [e for e in events if e["action"] == "ERROR"]
+    facts = (f"{len(calls)} tool call(s) checked, {len(stopped)} stopped; {len(results)} result set(s) checked, "
+             f"{withheld} result(s) withheld; {sum(e.get('per_item_checks', 0) for e in results)} per-result re-checks")
+    if errors:
+        return (step, name, "SCAN FAILED", "warn", facts + f". {errors[0]['reason']}")
+    if stopped or withheld:
+        why = "; ".join(f"{e['tool']}: {e['action']} ({e['reason'][:80]})" for e in stopped + [r for r in results if r.get("withheld")])
+        return (step, name, "BLOCKED" if stopped else "SANITISED", "block" if stopped else "warn", facts + ". " + why)
+    masked = [e for e in events if e["decision"] == "mask"]
+    return (step, name, "MASKED" if masked else "PASSED", "warn" if masked else "ok",
+            facts + (". Masked text used; product links and ids kept." if masked else "."))
+
+
+def output_guard_row(scan: dict, stopped: bool) -> tuple[str, str, str, str, str]:
+    step, name = "8 · Output guard", "ProofAgent Nano output scan (API)"
+    src = scan.get("source")
+    if src in (None, "skipped"):
+        return (step, name, "NOT NEEDED", "skip", "Fixed wording (refusal, clarification): ShopVoice's own constant text, not sent.")
+    if src == "disabled":
+        return (step, name, "OFF", "skip", scan.get("note") or "No scan was made.")
+    if src == "error":
+        return (step, name, "SCAN FAILED", "block" if stopped else "warn",
+                f"No ProofAgent verdict: {scan.get('error')}. {scan.get('note', '')}")
+    kind = {"pass": "ok", "mask": "warn", "review": "block", "block": "block"}.get(scan.get("decision"), "warn")
+    facts = [f"decision {scan.get('decision')}", f"severity {scan.get('severity')}"]
+    if scan.get("top_risk"):
+        facts.append(f"top risk {scan['top_risk']}")
+    if scan.get("latency_ms") is not None:
+        facts.append(f"{scan['latency_ms']} ms")
+    return (step, name, scan.get("action") or "", kind, " · ".join(facts) + (f". {scan['note']}" if scan.get("note") else ""))
 
 
 def checkpoints_html(rows: list[dict]) -> str:
@@ -477,6 +527,16 @@ def card_asr(update, detail, state):
             st.dataframe(pd.DataFrame(asr["segments"]), hide_index=True, use_container_width=True)
     else:
         st.caption("Typed input: speech recognition was skipped.")
+
+
+def card_output_guard(update, detail, state):
+    scan = detail.get("scan") or {}
+    if scan.get("source") == "skipped":
+        st.caption("Fixed wording (refusal, clarification, guard reply): not sent to ProofAgent.")
+        return
+    card_input_guard(update, detail, state)
+    if scan.get("decision") in ("block", "review"):
+        st.caption("The drafted answer was replaced by a safe reply and was not shown or spoken.")
 
 
 def card_input_guard(update, detail, state):
@@ -548,6 +608,15 @@ def card_retriever(update, detail, state):
             "arguments": json.dumps({k: v for k, v in c["args"].items() if k != "top_k"}),
             "results": c["count"], "ms": c.get("ms"), "error": c.get("error") or ""} for c in calls]),
             hide_index=True, use_container_width=True)
+    pa = detail.get("proofagent_mcp") or []
+    if pa:
+        st.markdown("<div class='sv-label'>ProofAgent MCP checks · our code calls them before and after every tool call</div>",
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame([{
+            "ProofAgent MCP tool": e["mcp_tool"], "for": e.get("tool"), "action": e["action"],
+            "results in -> out": (f"{e.get('results_in')} -> {e.get('results_out')}" if e["checkpoint"] == "tool_result" else "-"),
+            "reason": (e.get("reason") or "")[:120], "ms": e.get("latency_ms")} for e in pa]),
+            hide_index=True, use_container_width=True)
     evidence = update.get("evidence") or []
     if evidence:
         st.markdown(f"<div class='sv-label'>Evidence kept · {len(evidence)} · the only product facts the Answerer may use</div>",
@@ -614,7 +683,7 @@ def card_tts(update, detail, state):
 
 RENDERERS = {"asr": card_asr, "input_guard": card_input_guard, "router": card_router, "planner": card_planner, "retriever": card_retriever,
              "answerer": card_answerer, "critic": card_critic, "finalize": card_finalize,
-             "respond_direct": card_direct, "tts": card_tts}
+             "respond_direct": card_direct, "output_guard": card_output_guard, "tts": card_tts}
 
 
 # ------------------------------------------------------------------ answer
@@ -752,9 +821,12 @@ pills = [
     f'<span class="sv-pill"><i></i>TTS <b>{esc(settings.tts_provider)}</b></span>',
     f'<span class="sv-pill{"" if web_ok else " warn"}"><i></i>web.search <b>{esc(settings.web_provider)}</b></span>',
     f'<span class="sv-pill"><i></i>MCP <b>{esc(settings.mcp_transport)}</b></span>',
-    f'<span class="sv-pill{"" if settings.guard_mode == "on" and settings.nano_key else " warn"}"><i></i>ProofAgent input guard <b>'
-    + esc("on (Nano API)" if settings.guard_mode == "on" and settings.nano_key else
-          "on, NO KEY (scans fail)" if settings.guard_mode == "on" else "off") + "</b></span>",
+    f'<span class="sv-pill{"" if settings.guard_mode == "on" and settings.nano_key else " warn"}"><i></i>ProofAgent <b>'
+    + esc(("input API · runtime MCP · output API" if {"input", "tool_call", "tool_result", "output"} <= proofagent_checkpoints()
+           else " · ".join(sorted(proofagent_checkpoints()))) if settings.guard_mode == "on" and settings.nano_key else
+          "on, NO KEY (checks fail)" if settings.guard_mode == "on" else "off")
+    + (f" · {last_usage().get('free_left')} free calls left" if last_usage().get("free_left") is not None else "")
+    + "</b></span>",
 ]
 st.markdown(
     '<div class="sv-hero"><div style="display:flex;gap:14px;align-items:center"><div class="logo">🎙</div>'

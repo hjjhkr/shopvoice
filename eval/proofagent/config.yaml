@@ -43,5 +43,6 @@ pin_traps:                                    # force-include every project scen
 # results are reproducible (eval/fixtures/web_fixture.json).
 agent_env:
   WEB_SEARCH_PROVIDER: fixture
+  PROOFAGENT_GUARD: "off"            # the scorecard measures the agent itself; Nano checks would also spend quota
 
 output_dir: eval/results
