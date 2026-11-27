@@ -1,11 +1,11 @@
 [
   {
     "name": "rag.search",
-    "description": "Search the PRIVATE product catalog (Amazon Product Dataset 2020) with hybrid retrieval: vector similarity + BM25, restricted by metadata filters. Returns products with {doc_id, sku, title, price, rating, brand, ingredients, category, features}. Cite results by doc_id. Prices are a January 2020 snapshot.",
+    "description": "Search the PRIVATE product catalog (Amazon Reviews 2023, Household Supplies: cleaning, laundry, dishwashing, paper and plastic, air care, pest control) with hybrid retrieval: vector similarity + BM25, restricted by metadata filters. Returns products with {doc_id, sku, title, price, rating (average stars), rating_count, brand, ingredients, claims (the listing's own wording), scent, size, price_per_oz, category, features}. Cite results by doc_id. Prices are a 2023 snapshot; there is no review text.",
     "input_schema": {
       "properties": {
         "query": {
-          "description": "What to look for, e.g. 'wooden puzzle for toddlers'",
+          "description": "What to look for, e.g. 'eco-friendly stainless steel cleaner'",
           "title": "Query",
           "type": "string"
         },
@@ -66,7 +66,7 @@
             }
           ],
           "default": null,
-          "description": "Category substring, e.g. 'Toys & Games'",
+          "description": "Category substring, e.g. 'Laundry' or 'Household Cleaning'",
           "title": "Category"
         },
         "min_rating": {

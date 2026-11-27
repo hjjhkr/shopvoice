@@ -39,7 +39,7 @@ def test_disallowed_tool_is_rejected(session):
 
 
 def test_discovery_respects_budget_and_cites(session):
-    r = session().run_text("I need a wooden puzzle for a toddler under twenty dollars")
+    r = session().run_text("I need a dish soap under twenty dollars")
     recs = r["answer"]["recommendations"]
     assert [s["node"] for s in r["steps"]] == ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
     assert 1 <= len(recs) <= 3 and all(x["price"] <= 20 for x in recs)
@@ -50,20 +50,36 @@ def test_discovery_respects_budget_and_cites(session):
 
 
 def test_missing_product_is_not_invented(session):
-    r = session().run_text("Recommend an eco-friendly stainless steel cleaner under fifteen dollars")
+    r = session().run_text("I need a robot vacuum under two hundred dollars")
     assert r["answer"]["recommendations"] == [] and "couldn't find" in r["spoken_summary"]
 
 
+def test_assignment_example_finds_cleaners_and_keeps_the_surface_out_of_the_filters(session):
+    """'Stainless steel cleaner' names the surface, not a material: no material filter, and real cleaners come back."""
+    r = session().run_text("Recommend an eco-friendly stainless steel cleaner under fifteen dollars")
+    recs = r["answer"]["recommendations"]
+    assert not r["intent"]["constraints"].get("material")
+    assert recs and all(x["price"] <= 15 and "clean" in x["title"].lower() for x in recs)
+    assert all(x["rating"] is not None and x["rating_count"] for x in recs)          # ratings come with every pick
+
+
+def test_rating_floor_is_applied(session):
+    r = session().run_text("Find a laundry detergent rated at least four and a half stars under twenty dollars")
+    recs = r["answer"]["recommendations"]
+    assert any((c["args"].get("min_rating") or 0) >= 4.5 for c in r["tool_calls"] if c["tool"] == "rag.search")
+    assert recs and all(x["rating"] >= 4.5 and x["price"] <= 20 for x in recs)
+
+
 def test_live_price_conflict_is_reported(session):
-    r = session().run_text("What is the current price of the Melissa and Doug safari wooden chunky puzzle?")
+    r = session().run_text("What is the current price of the Affresh stainless steel cleaning spray?")
     assert {c["tool"] for c in r["tool_calls"]} == {"rag.search", "web.search"}
-    assert r["conflicts"] and "13.49" in r["final_text"] and "9.99" in r["final_text"]
+    assert r["conflicts"] and "6.49" in r["final_text"] and "4.95" in r["final_text"]
     assert any(c["type"] == "live" for c in r["citations"])
 
 
 def test_injected_web_result_is_ignored(session):
-    r = session().run_text("What is the latest price for LEGO Classic building kits?")
-    assert "MegaBlox" not in r["final_text"] and "299" not in r["final_text"]
+    r = session().run_text("What is the latest price for Clorox disinfecting wipes?")
+    assert "MegaClean" not in r["final_text"] and "299" not in r["final_text"]
     assert all("spam.test" not in w["url"] for w in r.get("live_results", []))
 
 
@@ -75,28 +91,28 @@ def test_unsafe_and_injection_requests_use_no_tools(session):
 
 
 def test_brand_and_budget_match_is_found_not_listed_as_a_near_miss(session):
-    """Regression: the only LEGO product under $5 must be recommended, not reported as 'no match'."""
-    r = session().run_text("Show me a set from LEGO under five dollars")
+    """Regression: the only products of a brand under the budget must be recommended, not reported as 'no match'."""
+    r = session().run_text("Show me a cleaner from Affresh under five dollars")
     recs = r["answer"]["recommendations"]
-    assert recs and all("lego" in x["title"].lower() and x["price"] <= 5 for x in recs)
+    assert recs and all("affresh" in x["title"].lower() and x["price"] <= 5 for x in recs)
 
 
 def test_other_brands_are_not_offered_in_place_of_the_requested_brand(session):
-    r = session().run_text("Show me a set from LEGO under two dollars")
+    r = session().run_text("Show me a cleaner from Affresh under two dollars")
     assert r["answer"]["recommendations"] == []
 
 
 def test_price_check_finds_an_over_budget_product(session):
     """Regression: a price lookup must not say 'not in the catalog' because the product is over budget."""
-    r = session().run_text("What is the current price of the Melissa and Doug safari wooden chunky puzzle? My budget is five dollars.")
+    r = session().run_text("What is the current price of the Seventh Generation free and clear laundry detergent? My budget is five dollars.")
     recs = r["answer"]["recommendations"]
-    assert recs and "Safari" in recs[0]["title"] and "above your $5.00 budget" in r["spoken_summary"]
+    assert recs and "Seventh Generation" in recs[0]["title"] and "above your $5.00 budget" in r["spoken_summary"]
 
 
 def test_stream_reports_every_node_with_its_intermediate_result(session):
     """The UI's live view relies on a start and an end event per node, in graph order."""
     s = session()
-    events = list(s.stream_text("I need a wooden puzzle for a toddler under twenty dollars"))
+    events = list(s.stream_text("I need a dish soap under twenty dollars"))
     order = ["asr", "input_guard", "router", "planner", "retriever", "answerer", "critic", "finalize", "tts"]
     assert [e["node"] for e in events if e["event"] == "start"] == order
     ends = {e["node"]: e["update"] for e in events if e["event"] == "end"}
@@ -110,7 +126,7 @@ def test_stream_reports_every_node_with_its_intermediate_result(session):
 
 def test_follow_up_carries_constraints(session):
     s = session()
-    s.run_text("I need a wooden puzzle for a toddler under twenty dollars")
-    r = s.run_text("Do you have a cheaper one, under ten dollars?")
-    assert r["intent"]["constraints"]["max_price"] == 10
-    assert r["answer"]["recommendations"] and all(x["price"] <= 10 for x in r["answer"]["recommendations"])
+    s.run_text("I need a dish soap under twenty dollars")
+    r = s.run_text("Do you have a cheaper one, under five dollars?")
+    assert r["intent"]["constraints"]["max_price"] == 5
+    assert r["answer"]["recommendations"] and all(x["price"] <= 5 for x in r["answer"]["recommendations"])

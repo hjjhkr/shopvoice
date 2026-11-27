@@ -1,229 +1,414 @@
 # Retrieval benchmark for rag.search (ProductStore.search). Used by eval/run_retrieval_eval.py.
+# Catalog: Amazon Reviews 2023, Household Supplies (data/processed/products.parquet, 25,000 products: cleaning tools
+# and cleaners, laundry, batteries, lighters, paper & plastic, tissues, air fresheners, dishwashing, pest control).
 #
 # Relevance is NOT taken from any retriever's output, so no method is graded on its own picks.
 #   known_item : the user names one product; `targets` are its doc_ids (found with a title search, checked by hand).
-#                Queries are phrased the way a user would say them ("Melissa and Doug", no model numbers),
-#                not copied from the title.
+#                A product sold in several pack sizes or bundles is one product, so every listing of it is a target.
+#                Queries are phrased the way a user would say them ("Bar Keepers Friend powder", no sizes or
+#                model numbers), not copied from the title.
 #   attribute  : relevance is a rule over catalog fields, written before any retrieval was run:
 #                  relevant : grade 1 = the kind of product asked for. Every key must match (AND);
 #                             the patterns inside one key are alternatives (OR).
-#                  ideal    : grade 2 = also meets the softer preferences (age, style).
-#                  exclude_title / exclude_category : never relevant (accessories, refills, parts).
+#                             `any` is an OR of sub-criteria (e.g. category OR title), `all` an AND of sub-criteria
+#                             (two separate title conditions).
+#                  ideal    : grade 2 = also meets the softer preferences (eco-friendly, for the bathroom, heavy duty).
+#                             An attribute the user states as the point of the request (fragrance free, 13 gallon,
+#                             wool) is part of `relevant`, not `ideal`.
+#                  exclude_title / exclude_category : never relevant (holders, refills, tools, accessories, parts).
 #                Pattern keys: title (title), text (title + features + description), category (category path).
-#                age_max: manufacturer minimum age <= N years (unknown age does not satisfy it).
+#                age_max: manufacturer minimum age <= N years (toy catalogs only; unused here).
 #                `filters` are passed to rag.search exactly as the Planner would, and relevance also respects them.
-#   no_match   : nothing in the catalog fits. Only toys share the words (toy laptop, toy coffee maker,
-#                bubble mower), so a `strong` label in the top 5 counts as a false match.
+#   no_match   : nothing in the catalog fits (verified by title and category search). Most share words with real
+#                products (robot vacuum -> robot mop pads, lawn mower -> lawn mower batteries, earbuds -> headphone
+#                batteries, shampoo -> carpet shampoo, running shoes -> shoe deodorizer), so a `strong` label in the
+#                top 5 counts as a false match.
 #
 # The criteria were checked by listing every matching product and reading a sample of titles, then audited
-# against every product any mode placed in its top 5 (eval/run_retrieval_eval.py --audit). The audit found 20
-# relevant products the first criteria graded 0, and the criteria were fixed (e.g. "battery powered" RC cars excluded as parts, "Super Hero" spelled as two words,
-# magnetic tiles filed under "Magnetic & Felt Playboards"); the criteria key `any` is an OR of sub-criteria;
-# the fixed criteria apply to every mode equally.
+# against every product any mode placed in its top 5 (eval/run_retrieval_eval.py --audit). The audit found 11
+# relevant products the first criteria graded 0 (e.g. Clorox wipes whose title omits "disinfecting", an oven cleaning
+# paste, "Plasticless" paper straws, toilet paper "with flushable tube"). Other fixes made while checking: tools and
+# holders that share the product noun (toilet brushes and pumice stones for "toilet bowl cleaner", paper towel
+# holders, chainmail scrubbers "for stainless steel"), words inside other words ("versatile" contains "tile"),
+# and bundles that contain the product. The fixed criteria apply to every mode equally.
 
 queries:
   # ---------------------------------------------------------------- attribute
-  - id: wooden_puzzle_toddler
+  - id: stainless_steel_cleaner
     type: attribute
-    query: wooden puzzle for a toddler
-    filters: {max_price: 20}
-    relevant: {title: ['\bpuzzle'], text: ['\bwood']}
-    ideal: {age_max: 3}
-
-  - id: stem_building_kit
-    type: attribute
-    query: STEM building kit for an 8 year old
-    relevant:
-      title: ['\bstem\b', 'engineering', 'building', 'construction']
-      category: ['Building Toys', 'Science Kits', 'Learning & Education']
-    ideal: {age_max: 8}
-
-  - id: plush_unicorn
-    type: attribute
-    query: unicorn stuffed animal
-    relevant: {title: ['unicorn'], category: ['Stuffed Animals', 'Plush']}
-
-  - id: family_board_game
-    type: attribute
-    query: board game for family night
-    filters: {max_price: 30}
-    relevant: {title: ['board game', '\bgame\b'], category: ['Board Games']}
-    ideal: {text: ['family']}
-
-  - id: jigsaw_1000
-    type: attribute
-    query: 1000 piece jigsaw puzzle for adults
-    relevant: {title: ['1000[- ]?(?:pc|piece)', '1,000'], category: ['Puzzles']}
-
-  - id: rc_car
-    type: attribute
-    query: remote control car for kids
+    query: eco-friendly stainless steel cleaner
+    filters: {max_price: 15}
     relevant:
       any:
-        - {title: ['remote control', '\brc\b', 'r/c', 'radio control'], text: ['\bcar\b', 'truck', 'racer', 'vehicle']}
-        - {category: ['Controlled Vehicles > (?:Cars|Trucks)']}
-    exclude_title: ['\btires?\b', 'replacement wheels?', 'skin', 'receiver', 'servo', 'charger', 'control board', 'replacement', 'spare', 'sheet']
-    exclude_category: ['Vehicle Parts']     # the parts branch; vehicles sit under "Vehicles & Parts > ... Vehicles"
+        - {category: ['Stainless Steel Surface Cleaners']}
+        - {title: ['stainless(?: steel)?\b.{0,40}(?:cleaner|cleanser|polish\b|cleaning (?:spray|paste|wipes)|wipes)', '(?:cleaner|polish\b).{0,40}stainless']}
+    exclude_title: ['scrubb?er', 'scour', 'sponge', '\bwool\b', 'straws?\b', 'brush', 'tumbler', 'duster', '\bpole\b', 'chainmail', 'cast iron', 'bottle cleaner', '^(?!.*(?:cleaner|cleanser|polish\b|spray)).*\bcloths?\b']
+    ideal: {text: ['eco[- ]?friendly', 'plant[- ]based', 'non[- ]toxic', 'biodegradable', 'natural']}
 
-  - id: art_easel
+  - id: ff_laundry_detergent
     type: attribute
-    query: kids art easel
-    relevant: {title: ['\beasel\b']}
-    exclude_title: ['easel pads?', 'paper roll \(', 'refill']   # paper refills, not easels
-
-  - id: dinosaur_toy
-    type: attribute
-    query: uh I'm looking for like a dinosaur toy for my three year old
-    relevant: {title: ['dinosaur', '\bdino\b', 't-rex', 'saurus', 'raptor', 'triceratops', 'jurassic']}
-    ideal: {age_max: 3}
-
-  - id: girls_costume
-    type: attribute
-    query: halloween costume for a girl
-    relevant: {title: ['costume'], text: ['\bgirl']}
-
-  - id: baby_teether
-    type: attribute
-    query: teething toy for a baby
-    relevant: {title: ['teeth(?:e|er|ing)\b']}
-
-  - id: water_gun
-    type: attribute
-    query: water gun for the pool
-    relevant: {title: ['water gun', 'water blaster', 'squirt gun', 'water pistol', 'soaker']}
-
-  - id: play_kitchen
-    type: attribute
-    query: pretend play kitchen set
-    relevant: {title: ['kitchen', 'cooker', 'stove', 'cookware', 'pots and pans'], category: ['Pretend Play', 'Kitchen Toys']}
-    ideal: {category: ['Kitchen Playsets']}
-
-  - id: magnetic_tiles
-    type: attribute
-    query: magnetic building tiles
-    relevant: {title: ['magnetic', 'magnet'], text: ['\btiles?\b', 'blocks?', 'building']}
-
-  - id: kite
-    type: attribute
-    query: a kite to fly at the beach
-    relevant: {title: ['\bkites?\b']}
-
-  - id: lego_under_5
-    type: attribute
-    query: LEGO set
-    filters: {max_price: 5, brand: LEGO}
-    relevant: {title: ['\blego\b']}
-
-  - id: melissa_doug_under_15
-    type: attribute
-    query: Melissa and Doug toy
-    filters: {max_price: 15, brand: Melissa and Doug}
-    relevant: {title: ['melissa (?:&|and) doug']}
-
-  - id: party_balloons
-    type: attribute
-    query: balloons for a birthday party
-    relevant: {title: ['balloon']}
-    exclude_title: ['bank', 'pump', 'weight', 'strip']
-
-  - id: kick_scooter
-    type: attribute
-    query: kick scooter for kids
-    relevant: {title: ['scooter'], category: ['Scooter', 'Ride-On']}
-    exclude_title: ['skin', 'figure', 'compatible', 'helmet', 'grip', 'replacement', 'hoverboard', 'scooter board']
-    ideal: {title: ['kick']}
-
-  - id: hand_puppet
-    type: attribute
-    query: animal hand puppet
-    relevant: {title: ['puppet']}
-    exclude_title: ['card', 'golf']
-    ideal: {title: ['hand puppet']}
-
-  - id: card_game
-    type: attribute
-    query: a card game to play with friends
-    relevant: {any: [{title: ['card game']}, {category: ['Card Games']}]}
-    exclude_title: ['shirt']
-
-  - id: baby_rattle
-    type: attribute
-    query: rattle for a newborn
-    relevant: {title: ['rattle']}
-
-  - id: superhero_figure
-    type: attribute
-    query: superhero action figure
+    query: fragrance free laundry detergent
     relevant:
-      title: ['figure']
-      text: ['marvel', 'super ?heroe?s?', 'avengers', 'batman', 'spider-man', 'superman', 'dc comics', 'justice league']
+      any:
+        - {category: ['Laundry Detergent']}
+        - {title: ['laundry detergent']}
+      text: ['fragrance[- ]free', 'unscented', 'free (?:&|and) (?:clear|gentle)', 'no (?:added )?fragrance', 'without fragrance']
 
-  - id: science_kit
+  - id: dish_soap_under_5
     type: attribute
-    query: science experiment kit
-    relevant: {title: ['science', 'experiment'], text: ['\bkit\b', 'experiment']}
+    query: dish soap
+    filters: {max_price: 5}
+    relevant:
+      any:
+        - {category: ['Dishwashing > Dish Soap']}
+        - {title: ['dish(?:washing)? (?:soap|liquid|detergent|spray)', 'dish (?:&|and) (?:hand|bottle) soap']}
+    exclude_title: ['dishwasher', 'dispens', 'brush', 'sponge', 'scrubber', 'automatic']
 
-  - id: chess_set
+  - id: toilet_bowl_cleaner
     type: attribute
-    query: wooden chess set
-    relevant: {title: ['\bchess']}
-    exclude_title: ['chessex']   # a dice brand
-    ideal: {text: ['\bwood']}
+    query: toilet bowl cleaner
+    relevant:
+      any:
+        - {category: ['Toilet Cleaners']}
+        - {title: ['toilet (?:bowl )?(?:cleaner|cleaning (?:gel|tablets|stamps)|tablets|gel)']}
+    exclude_title: ['brush', 'wand', 'plunger', 'caddy', 'holder', 'toilet paper', 'flushable', 'pumice', 'carpet', '\btool\b']
+
+  - id: microfiber_cloths
+    type: attribute
+    query: microfiber cleaning cloths
+    relevant:
+      all: [{title: ['micro[- ]?fib(?:er|re)']}, {title: ['\bcloths?\b', 'towels?\b', '\brags?\b', 'dishcloths?']}]
+    exclude_title: ['\bmop\b', 'duster', 'glove', 'mitt', 'slipper', 'sleeve', '\bpads?\b', 'refill', 'sponge', 'brush', 'cleaner and polish', 'conditioner', 'polish\b', 'spray', 'squeegee', 'flints?\b', 'batter']
+
+  - id: disinfecting_wipes
+    type: attribute
+    query: disinfecting wipes
+    relevant:
+      any:
+        - {category: ['Disinfectant Wipes']}
+        - {all: [{title: ['disinfect', 'antibacterial', 'sanitiz', 'kills 99', 'germs?\b']}, {title: ['\bwipes?\b']}]}
+    exclude_title: ['dispenser', 'bucket', '\bmop\b', 'flushable', '\bbody\b', 'hand sanitiz', 'baby wipes', 'spray(?! (?:and|&) wipes)']
+
+  - id: kitchen_trash_bags
+    type: attribute
+    query: 13 gallon kitchen trash bags
+    relevant:
+      all: [{title: ['trash bags?', 'garbage bags?', 'trash can liners?', 'can liners?', 'bin liners?', 'kitchen bags?']}, {title: ['13[- ]?gal', '13 gallon', 'tall kitchen']}]
+
+  - id: aa_batteries
+    type: attribute
+    query: AA batteries
+    filters: {min_rating: 4.5}
+    relevant:
+      any:
+        - {category: ['Household Batteries > AA$']}
+        - {title: ['\bAA\b.{0,40}batter', 'double a batter']}
+    exclude_title: ['charger', '\bcase\b', 'organizer', 'storage', 'holder', 'tester', '2/3 ?aa', 'adapter', 'adaptor', 'spacer']
+
+  - id: bathroom_air_freshener
+    type: attribute
+    query: air freshener for the bathroom
+    relevant:
+      any:
+        - {category: ['Air Fresheners']}
+        - {title: ['air freshener', 'odor eliminator', 'room spray', 'toilet spray', 'poo[- ]?pourri']}
+    exclude_title: ['car air freshener', 'vent clip', 'shoe']
+    ideal: {text: ['bathroom', 'toilet', '\bpoop?\b', 'restroom', 'washroom']}
+
+  - id: ant_killer
+    type: attribute
+    query: ant killer
+    relevant:
+      text: ['\bants?\b']
+      title: ['\bants?\b', 'multi[- ]insect', 'insect (?:killer|spray)', 'bug (?:killer|spray)', 'pest (?:killer|control spray)', 'insecticide', 'home defense']
+    exclude_title: ['ultrasonic', 'plug[- ]in', 'disinfect', 'cast iron', 'kills 99', 'germ', 'virus', 'bacteria', 'mold', 'pouches', 'rodent', 'mice', 'mouse', 'fly trap', 'fruit fl', 'window decal', 'bed bug (?:&|and) mite', 'bed bug (?:killer|spray)', 'moth', '\blice\b', 'mosquito repellent', 'refillable spray bottle', 'empty', 'bulb duster']
+
+  - id: non_scratch_sponge
+    type: attribute
+    query: non-scratch scrub sponge for dishes
+    relevant:
+      title: ['sponge']
+    exclude_title: ['\bmop\b', 'holder', 'caddy', 'rack', 'brush', 'steel wool', 'eraser', 'magic', 'duster', 'car wash', 'makeup', '\bbath\b', 'body', 'sponge cloths?', 'cellulose cloth', 'dishcloth', 'swedish', 'squeegee', 'soap dispens', 'grout', 'blinds?\b', 'dryer']
+    exclude_category: ['Mopping']
+    ideal: {text: ['non[- ]?scratch', 'scratch[- ]free', 'won.t scratch', 'will not scratch', 'safe on non[- ]?stick']}
+
+  - id: glass_cleaner
+    type: attribute
+    query: streak free glass cleaner
+    relevant:
+      any:
+        - {category: ['Glass Cleaners']}
+        - {title: ['glass cleaner', 'window cleaner', 'glass (?:&|and) (?:surface|window|mirror|multi)', 'mirror cleaner', 'glass cleaning spray']}
+    exclude_title: ['squeegee', 'cloths?\b', 'towels?\b', 'scraper', 'cooktop', 'stove', 'brush', 'robot', 'vacuum', '\btool', 'wand', '\bpipe', 'bong', 'glove']
+
+  - id: oven_cleaner
+    type: attribute
+    query: oven cleaner
+    relevant:
+      any:
+        - {category: ['Oven & Grill Cleaners']}
+        - {title: ['oven (?:&|and) grill cleaner', 'oven.{0,30}cleaner', 'oven.{0,30}cleaning (?:paste|spray|gel|foam)']}
+    exclude_title: ['liner', 'brush', 'scraper', 'glove', 'mitt', 'microwave', 'eraser', '\bpads?\b', 'screens?\b', 'sleep', 'cooktop', 'stone', 'grill wipes']
+
+  - id: unscented_dryer_sheets
+    type: attribute
+    query: unscented dryer sheets
+    relevant:
+      any:
+        - {category: ['Dryer Sheets']}
+        - {title: ['dryer sheets?']}
+      text: ['unscented', 'fragrance[- ]free', 'free (?:&|and) (?:clear|gentle|sensitive)', 'scent[- ]free', 'no fragrance']
+    exclude_title: ['dispenser', 'holder', 'dryer balls?', 'detergent sheets']
+
+  - id: paper_towels
+    type: attribute
+    query: paper towels
+    relevant:
+      any:
+        - {category: ['Paper Towels']}
+        - {title: ['paper towels?', 'kitchen (?:paper )?rolls?']}
+    exclude_title: ['(?:towel|roll) (?:holder|stand|dispenser|rack|organizer)', 'reusable', 'washable', 'towelettes', 'wax(?:ed)? paper', '\bdeli\b', 'wipers?\b', '\bnapkins?\b(?!.*paper towels)', 'swedish', 'dishcloth']
+
+  - id: soft_toilet_paper
+    type: attribute
+    query: soft toilet paper
+    relevant:
+      any:
+        - {category: ['Toilet Paper$']}
+        - {title: ['toilet paper', 'toilet tissue', 'bath(?:room)? tissue']}
+    exclude_title: ['(?:paper|tissue) (?:holder|stand|storage|organizer|caddy)', 'spray', 'wipes', 'flushable (?:wipes|wet)', 'pocket', 'facial', 'travel size', 'gag gift', 'prank', 'novelty']
+    ideal: {text: ['\bsoft']}
+
+  - id: dishwasher_pods
+    type: attribute
+    query: dishwasher detergent pods
+    relevant:
+      any:
+        - {category: ['Dishwasher Detergent']}
+        - {title: ['dishwasher (?:detergent|pods|pacs|tabs|tablets|packs)', 'dishwashing tablets', 'auto(?:matic)? dish(?:washer)? (?:detergent|pods|powder)']}
+    exclude_title: ['^(?!.*(?:detergent|pods?\b|tabs\b|tablets|pacs\b)).*(?:cleaner|rinse aid|rinse agent)', 'dishwasher magic', 'booster', 'additive', 'freshener', '\bsalt\b', 'laundry']
+    ideal: {title: ['pods?\b', 'pacs?\b', 'tabs\b', 'tablets?', 'actionpacs', 'powerballs?', 'detergent packs']}
+
+  - id: hardwood_floor_cleaner
+    type: attribute
+    query: hardwood floor cleaner
+    relevant:
+      any:
+        - {category: ['Floor Cleaners']}
+        - {title: ['(?:floor|hardwood).{0,30}(?:cleaner|cleaning solution|polish|soap|wash|cream|restorer)']}
+      title: ['floor', 'hardwood']
+      text: ['hardwood', 'wood floors?']
+    exclude_title: ['\bpads?\b', 'starter kit', 'mop kit', 'spray mop -', 'spray mop with', 'mop (?:and|&) bucket', 'broom', 'machine\b(?! solution| formula)', 'scrubber', 'squeegee', 'cloths?\b', 'vacuum', 'sweeper', 'mats?\b']
+
+  - id: candle_lighter
+    type: attribute
+    query: long lighter for candles
+    relevant:
+      title: ['lighters?\b(?! (?:fluid|fuel|butane|insert|case|pouch|holder|leash|sleeve|socket|plug|adapter|refill|flints?|wicks?))']
+      text: ['candle']
+    exclude_title: ['fuel refill(?!able)', 'fuel canister', 'gas refill(?!able)', 'cigarette lighter (?:plug|adapter|outlet|socket)', 'insert', 'molds?\b', 'wick lighter case']
+    ideal: {title: ['candle lighter', '\blong\b', '\bwand\b', 'extended', '\bstick\b', 'multi[- ]purpose', '\bgrill\b', 'bbq']}
+
+  - id: cr2032
+    type: attribute
+    query: CR2032 coin battery
+    relevant:
+      title: ['cr ?2032', 'dl ?2032', '\b2032\b']
+    exclude_title: ['holder', '\bcase\b', 'organizer', 'tester', 'socket', 'storage (?:box|case)', 'lir ?2032', '3\.6 ?v', '3\.7 ?v', 'rechargeable']
+
+  - id: lint_roller_pet_hair
+    type: attribute
+    query: lint roller for pet hair
+    relevant:
+      title: ['lint roll', 'sticky roll', 'lint brush', 'lint remover', 'lint roller', 'pet hair roller', 'fur roller']
+    exclude_title: ['shaver', 'defuzzer', 'fuzz remover', 'pill', 'electric', 'rechargeable', 'battery', 'laundry', 'dryer', 'washing machine', 'mesh bag', 'filter', 'broom', 'rake', 'squeegee', 'vent', 'blades?\b']
+    ideal: {text: ['\bpets?\b', '\bdogs?\b', '\bcats?\b', 'fur']}
+
+  - id: drain_clog_remover
+    type: attribute
+    query: drain clog remover
+    relevant:
+      any:
+        - {category: ['Drain Openers']}
+        - {title: ['drain (?:opener|cleaner|clog)', 'clog (?:remover|buster|dissolver)', 'drain snake', 'unclog']}
+    exclude_title: ['fruit fly', 'drain fly', 'drain flies', 'strainer', 'stopper', '^(?!.*clog remover).*catcher', 'cover', 'garbage disposal (?:cleaner|freshener)', 'disposer care', 'septic (?:tank )?treatment', 'septic shock', 'drain pans?', 'humidifier']
+
+
+  - id: aluminum_foil
+    type: attribute
+    query: aluminum foil
+    relevant:
+      any:
+        - {category: ['Aluminum Foil']}
+        - {title: ['alumin(?:i)?um foil', 'tin foil', 'foil roll', 'heavy duty foil']}
+    exclude_title: ['pans?\b', 'containers?', 'lids?\b', 'bags?\b', 'sleeves?', 'trays?\b', 'hot ?dog', 'tape', 'stove', 'burner', 'liners?', 'cups?\b', 'pouch']
+
+  - id: rubber_gloves
+    type: attribute
+    query: reusable rubber gloves for washing dishes
+    relevant:
+      title: ['gloves?']
+      text: ['rubber', 'latex', 'nitrile', 'silicone', '\bpvc\b', 'vinyl']
+    exclude_title: ['typing', 'disposable', '\bexam', 'medical', 'compression', 'golf', '\d{2,} ?(?:count|ct|pcs|pieces|pack)\b', '\[\d{2,}', 'powder[- ]free', 'box/\d+', '/box']
+    ideal: {text: ['reusable', 'dish', 'kitchen', 'household']}
+
+  - id: laundry_stain_remover
+    type: attribute
+    query: stain remover for clothes
+    relevant:
+      any:
+        - {category: ['Laundry > Stain Removers']}
+        - {title: ['stain (?:remover|stick|spray|treater|fighter|pretreat)'], text: ['laundry', 'clothes', 'clothing', 'fabric', 'garment']}
+    exclude_title: ['^(?!.*cloth).*carpet', '^(?!.*cloth).*upholstery', '^(?!.*cloth).*\brugs?\b', 'grout', 'toilet', '\bwood\b', 'concrete', 'hard water', 'shower', '\btiles?\b', 'cookware', 'cooktop', '^(?!.*cloth).*mattress', 'stainless', 'spider', '\bbird', 'gallons', '\bpool\b', '\bboat', 'mold', 'mildew', 'rust', 'deck', 'driveway']
+
+  - id: carpet_stain_remover
+    type: attribute
+    query: carpet stain remover spray
+    relevant:
+      any:
+        - {category: ['Carpet Cleaners', 'Carpet Spot', 'Carpet Stain']}
+        - {title: ['carpet', '\brugs?\b'], text: ['stain', 'spot']}
+    exclude_title: ['rake', 'broom', 'vacuum(?! cleaner)', 'drill brush', 'scrub brush', 'deodorizer', 'freshener', 'tape', 'gripper', 'powerbrush', 'machine(?! cleaner)', 'shampooer', '\bmats?\b', '\blint\b', 'hair remover', 'shaver']
+    ideal: {any: [{category: ['Carpet Spot Cleaning Sprays', 'Carpet Stain Precleaners']}, {title: ['spray', '\bspot']}]}
+
+
+  - id: wool_dryer_balls
+    type: attribute
+    query: wool dryer balls
+    relevant:
+      title: ['wool']
+      any:
+        - {category: ['Dryer Balls']}
+        - {title: ['dryer balls?', 'laundry balls?']}
+
+  - id: smoke_detector_9v
+    type: attribute
+    query: 9 volt battery for a smoke detector
+    relevant:
+      all: [{title: ['\b9 ?v(?:olt)?\b', '\b9-volt', '6f22', '6lr61', '\bpp3\b', '\b1604']}, {title: ['batter']}]
+    exclude_title: ['clip', 'connector', 'snap', 'charger', 'holder', 'tester', '\bcase\b', 'adapter', 'adaptor', 'eliminator', 'cable']
+    ideal: {text: ['smoke', 'detector', 'alarm']}
+
+  - id: mold_mildew_remover
+    type: attribute
+    query: mold and mildew remover for the shower
+    relevant:
+      any:
+        - {category: ['Mold & Mildew']}
+        - {title: ['\bmold\b', 'mildew', '\bmould\b']}
+    exclude_title: ['resin', 'silicone mold', 'casting', 'gutter', 'brush', 'scrubber', 'squeegee', 'siding', '^(?!.*(?:shower|bathroom|tiles?\b|grout)).*washing machine', 'dehumidifier', 'absorber', 'moisture', 'cutout', 'pumice', '\bcups?\b']
+    ideal: {text: ['shower', 'bathroom', '\btub\b', '\btiles?\b', 'grout']}
+
+  - id: laundry_pods_top_rated
+    type: attribute
+    query: laundry detergent pods
+    filters: {min_rating: 4.7}
+    relevant:
+      any:
+        - {category: ['Detergent Pacs & Tablets']}
+        - {title: ['laundry.{0,40}(?:pods|pacs|packs|power paks|tablets)', '(?:pods|pacs|packs|paks).{0,30}laundry']}
+    exclude_title: ['dishwasher', '^(?!.*detergent).*scent booster', 'dispenser', 'container', 'organizer', '^(?!.*detergent).*(?:whitener|stain remover|booster)', 'trash can', 'bleach']
+
+  - id: paper_straws
+    type: attribute
+    query: biodegradable paper straws
+    relevant:
+      all: [{title: ['\bpaper\b']}, {title: ['straws?\b']}]
+    exclude_title: ['\bplastic\b', 'paper wrapped', 'stainless', '\bmetal\b', '\bglass\b', 'silicone', 'brush', 'cleaner', 'holder', 'dispenser', 'cups?\b', 'plates?\b', 'napkins?']
+    ideal: {text: ['biodegradable', 'compostable', 'eco[- ]?friendly']}
+
+  # ------------------------------------------------ brand named by the user (small pools)
+  - id: affresh_cleaner_under_5
+    type: attribute
+    query: cleaner
+    filters: {max_price: 5, brand: Affresh}
+    relevant: {title: ['clean']}
+
+  - id: clorox_bleach
+    type: attribute
+    query: bleach
+    filters: {brand: Clorox}
+    relevant:
+      any:
+        - {category: ['Laundry > Bleach']}
+        - {title: ['liquid bleach', 'bleach powder', 'bleach packs', 'regular bleach', 'germicidal bleach', 'disinfecting bleach', 'color safe bleach', '^clorox (?:splash-less )?bleach']}
+    exclude_title: ['bleach free', 'with bleach', 'bleach gel', 'toilet bowl', 'wipes?\b', 'clean-up', 'foamer']
+
+  - id: energizer_watch_battery
+    type: attribute
+    query: watch battery
+    filters: {max_price: 6, brand: Energizer}
+    relevant:
+      any:
+        - {category: ['Coin & Button Cell']}
+        - {title: ['watch', 'button cell', '\bcoin', 'silver oxide', '\bsr\d{3}', '\bcr ?\d{4}']}
+    ideal: {text: ['watch']}
 
   # ---------------------------------------------------------------- known item
-  - {id: ki_safari_puzzle, type: known_item, query: Melissa and Doug safari chunky puzzle, targets: [amz20-7bf4d392c47b]}
-  - {id: ki_lego_suitcase, type: known_item, query: LEGO classic creative suitcase, targets: [amz20-7e063675c29a]}
-  - {id: ki_tsuro, type: known_item, query: the Tsuro game of the path, targets: [amz20-ee0873676d88]}
-  - {id: ki_lion_king_monopoly, type: known_item, query: Lion King Monopoly, targets: [amz20-f54676a4d015]}
-  - {id: ki_razor_t3, type: known_item, query: Razor junior T3 scooter, targets: [amz20-8ab9a21739cf]}
-  - {id: ki_pusheenicorn, type: known_item, query: the Pusheen unicorn cat plush that makes a sound, targets: [amz20-d92c10e1df81]}
-  - {id: ki_retro_kitchen, type: known_item, query: KidKraft pink retro kitchen with a fridge, targets: [amz20-44d89a4bf8c5]}
-  - {id: ki_wolf_puppet, type: known_item, query: Folkmanis wolf pup puppet, targets: [amz20-fe4ed4aa718d]}
-  - {id: ki_newtons_beads, type: known_item, query: Steve Spangler Newton's beads experiment, targets: [amz20-072c3ae9f273]}
-  - {id: ki_physics_pro, type: known_item, query: Thames and Kosmos physics pro kit, targets: [amz20-2a3b2924f338]}
-  - {id: ki_magformers, type: known_item, query: Magformers magic space set with 55 pieces, targets: [amz20-c0069db4fed6]}
-  - {id: ki_frida, type: known_item, query: Frida Kahlo portrait thousand piece puzzle, targets: [amz20-a232e83df7a7]}
-  - {id: ki_giganto, type: known_item, query: Giganto roar and stomp figure, targets: [amz20-adc4372cd555]}
-  - {id: ki_bohnanza, type: known_item, query: Bohnanza bean card game, targets: [amz20-d5da00041b07]}
-  - {id: ki_crayola_easel, type: known_item, query: Crayola wooden easel with a chalkboard, targets: [amz20-9b291f6d1638]}
-  - {id: ki_super_soaker, type: known_item, query: Super Soaker Hydra, targets: [amz20-afedde0dbe30]}
-  - {id: ki_teething_ball, type: known_item, query: Itzy Ritzy teething ball with toothbrush, targets: [amz20-053fb8bb6198]}
-  - {id: ki_media_room, type: known_item, query: Hape dollhouse media room furniture, targets: [amz20-2b63cd8ac235]}
-  - {id: ki_solitaire_chess, type: known_item, query: ThinkFun solitaire chess, targets: [amz20-7ec4474b6158]}
-  - {id: ki_prism_bora, type: known_item, query: Prism Bora parafoil kite, targets: [amz20-e2baa87b9a39, amz20-b6396a48f994]}
-  - {id: ki_dog_man, type: known_item, query: Dog Man attack of the fleas board game, targets: [amz20-4e2063a5d109]}
-  - {id: ki_dream_kitchen, type: known_item, query: Step2 dream kitchen, targets: [amz20-06e8480f75c0]}
-
-  # ---------------------------------------------------------------- no match
-  - {id: nm_steel_cleaner, type: no_match, query: eco-friendly stainless steel cleaner}
-  - {id: nm_laptop, type: no_match, query: laptop for college work}
-  - {id: nm_espresso, type: no_match, query: espresso machine for my kitchen}
-  - {id: nm_lawn_mower, type: no_match, query: gas lawn mower for my yard}
-  - {id: nm_earbuds, type: no_match, query: noise cancelling wireless earbuds}
-  - {id: nm_dog_food, type: no_match, query: dry dog food for a large dog}
-  - {id: nm_printer_ink, type: no_match, query: printer ink cartridges}
-  - {id: nm_running_shoes, type: no_match, query: men's running shoes size 10}
-  - {id: nm_vitamins, type: no_match, query: multivitamin supplements for adults}
-  - {id: nm_car_tires, type: no_match, query: winter tires for my car}
+  - {id: ki_7gen_free_clear, type: known_item, query: Seventh Generation free and clear laundry detergent,
+     targets: [hh23-B088CHH37R, hh23-B09YX9D7HG, hh23-B09ZWSBQ7S, hh23-B0BHVHNZHK]}
+  - {id: ki_bkf_powder, type: known_item, query: Bar Keepers Friend powder,
+     targets: [hh23-B079SJCXX3, hh23-B0BV99DPYT, hh23-B09KM22PN6, hh23-B00BLKGJ2G, hh23-B0C2NR44JH]}
+  - {id: ki_clorox_wipes, type: known_item, query: Clorox disinfecting wipes,
+     targets: [hh23-B0BZTLKX7H, hh23-B09ZNHKJF5, hh23-B000GCRZL4, hh23-B0061ITITE, hh23-B09NWTMB1B, hh23-B0006OKLZ4,
+               hh23-B075J5NG6P, hh23-B01M5I31T3, hh23-B00KHYXW3G, hh23-B01IAIPH7Y, hh23-B078HRLXYG, hh23-B078HP5Q7T,
+               hh23-B001E6F31K, hh23-B001F03SDA, hh23-B078HDMW2S, hh23-B004RAR6A6, hh23-B078HD74BK]}
+  - {id: ki_scrub_daddy, type: known_item, query: the original Scrub Daddy sponge,
+     targets: [hh23-B078JT9G21, hh23-B0BVNXMBSX, hh23-B086XFLPGY]}
+  - {id: ki_wetjet_pads, type: known_item, query: Swiffer WetJet pad refills,
+     targets: [hh23-B0BZTN34Y1, hh23-B008R7CRQ8, hh23-B0BWXHLJZ8, hh23-B008UQV80C, hh23-B000QRAW8C, hh23-B09WT9TSY4]}
+  - {id: ki_tide_free_gentle, type: known_item, query: Tide pods free and gentle,
+     targets: [hh23-B09TQ79V58, hh23-B07QLZRQGM]}
+  - {id: ki_bounty_select, type: known_item, query: Bounty select a size paper towels,
+     targets: [hh23-B019XEY5GS, hh23-B0854TY9HQ, hh23-B07CYJJVKP, hh23-B07TBB57YX, hh23-B0BZBCH7RQ, hh23-B077CSZH6H,
+               hh23-B0B5FCLPTD, hh23-B086Q673BN]}
+  - {id: ki_charmin_ultra_soft, type: known_item, query: Charmin ultra soft toilet paper,
+     targets: [hh23-B079PG7FJV, hh23-B0B6Z11BPG, hh23-B0C6LR3LV7, hh23-B0BZBR4RVB, hh23-B06Y3Z6PTF, hh23-B00YMVI49W,
+               hh23-B07L5FDSR3, hh23-B0CH48TD8S, hh23-B00I3MV4KC, hh23-B0B694LWFG, hh23-B06ZYQDVCG, hh23-B0029XQKAU,
+               hh23-B071G84PMY, hh23-B08JLWDXDT, hh23-B08557YNLD, hh23-B00XBTYPXK, hh23-B00DOSAKQE]}
+  - {id: ki_meyers_lavender, type: known_item, query: Mrs. Meyer's lavender multi surface cleaner,
+     targets: [hh23-B0000UTUVA, hh23-B01MFAWJF9]}
+  - {id: ki_bon_ami, type: known_item, query: Bon Ami powder cleanser,
+     targets: [hh23-B005NEKQMA, hh23-B005UJ0QCI, hh23-B0BFZLH5BM, hh23-B01AZ1EMMA, hh23-B000BQYBC6, hh23-B07T9PKG8X]}
+  - {id: ki_magic_eraser, type: known_item, query: Mr. Clean Magic Eraser original,
+     targets: [hh23-B0BZTN9ZRY, hh23-B00FCX75S0, hh23-B004GDSW34]}
+  - {id: ki_oxiclean_versatile, type: known_item, query: OxiClean versatile stain remover,
+     targets: [hh23-B005GI8UOO, hh23-B00QKIHOY6, hh23-B000W4SEE8, hh23-B07K6WW24P, hh23-B07D57B5VR, hh23-B071CXNPTZ]}
+  - {id: ki_finish_quantum, type: known_item, query: Finish Quantum Infinity Shine dishwasher tablets,
+     targets: [hh23-B0BGQ6NNH1, hh23-B0B4CH7BK3, hh23-B0B69LTN72]}
+  - {id: ki_affresh_washer, type: known_item, query: Affresh washing machine cleaner, targets: [hh23-B08FMHVMM6]}
+  - {id: ki_zippo_fluid, type: known_item, query: Zippo lighter fluid,
+     targets: [hh23-B084D52D9V, hh23-B07DH96XD5, hh23-B000F37YKQ, hh23-B07ZPHVXSH, hh23-B07JC81HXQ, hh23-B07TFRWNRQ,
+               hh23-B07795RJM8, hh23-B0071MSVO2, hh23-B0140S9VES]}
+  - {id: ki_duracell_optimum, type: known_item, query: Duracell Optimum double A batteries,
+     targets: [hh23-B0C6FQR94Y, hh23-B0BJGL1Q9R, hh23-B0C7R88VCG]}
 
   # ------------------------------------------------ known item, described without its name (semantic recall)
   # The user remembers what the product is or does, not what it is called. Descriptions come from the product's
   # own feature text, so the right answer is unambiguous, but the query shares few words with the title.
-  - {id: kd_tsuro, type: known_item, descriptive: true, targets: [amz20-ee0873676d88],
-     query: strategy board game where you lay tiles to build paths and try to stay on the board}
-  - {id: kd_pusheenicorn, type: known_item, descriptive: true, targets: [amz20-d92c10e1df81],
-     query: purple plush cat with a unicorn horn that makes a sound when you squeeze it}
-  - {id: kd_physics_pro, type: known_item, descriptive: true, targets: [amz20-2a3b2924f338],
-     query: advanced physics kit where you build a wind tunnel and a hydraulic lift}
-  - {id: kd_solitaire_chess, type: known_item, descriptive: true, targets: [amz20-7ec4474b6158],
-     query: a chess puzzle game you can play alone}
-  - {id: kd_dog_man, type: known_item, descriptive: true, targets: [amz20-4e2063a5d109],
-     query: cooperative board game based on the Dav Pilkey books where you stop the fleas}
-  - {id: kd_retro_kitchen, type: known_item, descriptive: true, targets: [amz20-44d89a4bf8c5],
-     query: pink wooden play kitchen with a fridge and a dishwasher whose doors open}
-  - {id: kd_super_soaker, type: known_item, descriptive: true, targets: [amz20-afedde0dbe30],
-     query: big water blaster with a 65 ounce tank that fires cannon blasts of water}
-  - {id: kd_teething_ball, type: known_item, descriptive: true, targets: [amz20-053fb8bb6198],
-     query: lemon shaped silicone teether that doubles as a training toothbrush}
-  - {id: kd_lego_case, type: known_item, descriptive: true, targets: [amz20-7e063675c29a],
-     query: yellow carrying case full of classic building bricks}
+  - {id: kd_affresh_washer, type: known_item, descriptive: true, targets: [hh23-B08FMHVMM6],
+     query: the tablets Whirlpool and Maytag recommend for cleaning odor causing residue out of the washer}
+  - {id: kd_scrub_daddy, type: known_item, descriptive: true,
+     targets: [hh23-B078JT9G21, hh23-B0BVNXMBSX, hh23-B086XFLPGY, hh23-B0BKH7YX13, hh23-B00NGWJCIA, hh23-B085FXVSWB,
+               hh23-B086XGYX23, hh23-B09SQ4QVDS, hh23-B06W9M3H9S, hh23-B09LKYKZWY, hh23-B083TJ5PMQ],
+     query: smiley face sponge that gets firm in cold water and soft in warm water}
+  - {id: kd_wetjet_kit, type: known_item, descriptive: true,
+     targets: [hh23-B0BZTMY9TG, hh23-B0C33LJ77T, hh23-B0876T97C4, hh23-B0B2ML1VR5, hh23-B0035G078G, hh23-B01N4SGGWO],
+     query: battery powered spray mop kit that comes with disposable pads and a bottle of cleaning solution}
+  - {id: kd_tide_free_gentle, type: known_item, descriptive: true, targets: [hh23-B09TQ79V58, hh23-B07QLZRQGM],
+     query: unscented laundry pacs accepted by the National Eczema Association}
+  - {id: kd_bkf_powder, type: known_item, descriptive: true,
+     targets: [hh23-B079SJCXX3, hh23-B0BV99DPYT, hh23-B09KM22PN6, hh23-B00BLKGJ2G, hh23-B0C2NR44JH],
+     query: bleach free powdered cleanser that takes rust and tarnish off stainless steel and copper pots}
+
+  # ---------------------------------------------------------------- no match
+  - {id: nm_robot_vacuum, type: no_match, query: robot vacuum, filters: {max_price: 200}}
+  - {id: nm_laptop, type: no_match, query: laptop for college work}
+  - {id: nm_dog_food, type: no_match, query: dry dog food for a large dog}
+  - {id: nm_hair_shampoo, type: no_match, query: shampoo for dry hair}
+  - {id: nm_toothpaste, type: no_match, query: toothpaste for sensitive teeth}
+  - {id: nm_running_shoes, type: no_match, query: men's running shoes size 10}
+  - {id: nm_toy, type: no_match, query: a LEGO set for my son}
+  - {id: nm_espresso, type: no_match, query: espresso machine for my kitchen}
+  - {id: nm_lawn_mower, type: no_match, query: gas lawn mower for my yard}
+  - {id: nm_earbuds, type: no_match, query: noise cancelling wireless earbuds}

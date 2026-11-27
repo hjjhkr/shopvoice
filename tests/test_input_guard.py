@@ -217,3 +217,16 @@ def test_existing_pattern_guardrail_still_runs_when_proofagent_is_off(guard_env,
     assert r["input_scan"]["source"] == "disabled"
     assert r["intent"]["safety_flag"] == "hazardous_chemical" and r["tool_calls"] == []
     build.build_graph.cache_clear()
+
+
+def test_brand_masked_as_a_person_is_restored_but_real_names_stay_masked(monkeypatch):
+    """Nano masks some household brands as names ("Mrs. Meyers"); a masked word that is part of a catalog brand is
+    put back so the search keeps the brand. Names that are not brands, and other kinds of masks, stay masked."""
+    monkeypatch.setattr(input_guard, "_catalog_brand_keys", lambda: ("mrsmeyers", "clorox", "barkeepersfriend"))
+    text, restored = input_guard.restore_brand_names("Show me Mrs. Meyers cleaner", "Show me Mrs. [PERSON:LAST_NAME#1] cleaner")
+    assert text == "Show me Mrs. Meyers cleaner" and restored == ["Meyers"]
+    text, restored = input_guard.restore_brand_names("Ship to John Smith, a Clorox wipe",
+                                                     "Ship to [PERSON:FIRST_NAME#1] [PERSON:LAST_NAME#1], a Clorox wipe")
+    assert "John" not in text and "Smith" not in text and restored == []
+    text, _ = input_guard.restore_brand_names("she has eczema", "she has [HEALTH:CONDITION#1]")
+    assert text == "she has [HEALTH:CONDITION#1]"

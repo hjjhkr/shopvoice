@@ -65,11 +65,24 @@ _FOLLOW_UP = re.compile(r"\b(cheaper|cheapest|pricier|more expensive|another|oth
                         r"those|the (first|second|third|last) one|highest[- ]rated|most affordable|what about)\b", re.I)
 _PREFERENCES = [
     "eco-friendly", "eco friendly", "plant-based", "non-toxic", "nontoxic", "organic", "unscented", "fragrance-free",
-    "biodegradable", "recycled", "bpa-free", "hypoallergenic", "educational", "durable", "lightweight", "waterproof",
+    "biodegradable", "recycled", "bpa-free", "hypoallergenic", "dye-free", "phosphate-free", "septic safe", "pet safe",
+    "pet-safe", "streak-free", "concentrated", "refillable", "durable", "lightweight", "waterproof", "heavy duty",
     "quiet", "portable", "gift", "outdoor", "indoor", "for kids", "for toddlers", "for adults", "for babies",
+    "sensitive skin", "for hard water", "for pets",
 ]
 _MATERIALS = ["stainless steel", "wooden", "wood", "plastic", "cotton", "silicone", "metal", "bamboo", "glass",
-              "ceramic", "leather", "foam", "rubber", "plush", "paper"]
+              "ceramic", "leather", "foam", "rubber", "plush", "paper", "microfiber", "nylon", "cellulose", "sisal"]
+_SURFACE_PRODUCT = r"(?:\s+(?:\w+\s+){0,2})?(?:cleaners?|cleaning|polish(?:es)?|wipes?|sprays?|care|conditioners?|restorers?|protectants?|degreasers?)\b"
+
+
+def is_target_surface(material: str, text: str) -> bool:
+    """'stainless steel cleaner', 'glass cleaning wipes', 'wood floor polish': the word names the surface the product
+    is FOR, not what it is made of, so it must not become a material constraint."""
+    m, low = re.escape(material.lower()), (text or "").lower()
+    return (re.search(rf"\b{m}{_SURFACE_PRODUCT}", low) is not None
+            or re.search(rf"\b(?:for|on)\s+(?:\w+\s+){{0,2}}{m}\b", low) is not None)      # "a cloth for stainless steel"
+
+
 _AGE = re.compile(r"\b(?:for (?:an? |my )?)?(\d{1,2})[- ]?(?:year|yr)s?[- ]?olds?\b", re.I)
 _BRAND = re.compile(r"\b(?:by|from|made by|brand)\s+([A-Z][\w&'\-]+(?:\s+[A-Z][\w&'\-]+)?)")
 _FILLER = re.compile(
@@ -80,7 +93,7 @@ _FILLER = re.compile(
     r"is it|still available|and|that is|that are|which is|compare|versus|vs)\b", re.I)
 
 
-_RATING = re.compile(r"(?:\b(?:at least|over|above|more than|minimum(?: of)?|no less than)\s+)?"
+_RATING = re.compile(r"(?:\b(?:rated\s+|with\s+)?(?:at least|over|above|more than|minimum(?: of)?|no less than)\s+)?"
                      r"(\d(?:\.\d)?)(\s+and a half)?[\s-]*(?:stars?|star rating)\b|\brated\s+(\d(?:\.\d)?)(\s+and a half)?", re.I)
 
 
@@ -124,12 +137,14 @@ def rule_intent(transcript: str, history: list[dict] | None = None) -> Intent:
     low = text.lower()
     lo, hi = extract_budget(text)
     prefs = []
+    spaced = low.replace("-", " ")
     for p in _PREFERENCES:
-        if p in low and p.replace(" ", "-") not in prefs:
-            prefs.append(p.replace("eco friendly", "eco-friendly").replace("nontoxic", "non-toxic"))
+        canon = p.replace("eco friendly", "eco-friendly").replace("nontoxic", "non-toxic")
+        if (p in low or p.replace("-", " ") in spaced) and canon.replace(" ", "-") not in prefs and canon not in prefs:
+            prefs.append(canon)
     if (m := _AGE.search(low)):
         prefs.append(f"for a {m.group(1)} year old")
-    material = next((m for m in _MATERIALS if re.search(rf"\b{m}\b", low)), None)
+    material = next((m for m in _MATERIALS if re.search(rf"\b{m}\b", low) and not is_target_surface(m, low)), None)
     brand = (m.group(1) if (m := _BRAND.search(text)) else None)
 
     query = _FILLER.sub(" ", _strip_budget(text))

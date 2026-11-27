@@ -37,7 +37,8 @@ class Settings:
     # --- Embeddings / index ---
     embedding_provider: str  # local (ONNX MiniLM) | ollama | openai
     embedding_model: str
-    raw_csv: Path
+    raw_meta: Path
+    max_products: int
     products_parquet: Path
     chroma_dir: Path
     collection: str
@@ -79,7 +80,8 @@ def get_settings() -> Settings:
         llm_base_url=_env("LLM_BASE_URL"),
         embedding_provider=_env("EMBEDDING_PROVIDER", "local").lower(),
         embedding_model=_env("EMBEDDING_MODEL", ""),
-        raw_csv=_path("RAW_CSV", "data/raw/amazon_products_2020.csv"),
+        raw_meta=_path("RAW_META", "data/raw/hh2023/meta_household_supplies.jsonl"),
+        max_products=int(_env("MAX_PRODUCTS", "25000")),
         products_parquet=_path("PRODUCTS_PARQUET", "data/processed/products.parquet"),
         chroma_dir=_path("CHROMA_DIR", "data/chroma"),
         collection=_env("CHROMA_COLLECTION", "products"),

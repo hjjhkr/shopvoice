@@ -3,7 +3,7 @@ hybrid design earn its place?
 
     python eval/run_retrieval_eval.py                  # all modes, writes eval/results/retrieval_eval.{json,md}
     python eval/run_retrieval_eval.py --modes hybrid   # one mode
-    python eval/run_retrieval_eval.py --show wooden_puzzle_toddler   # print the top 10 for one query
+    python eval/run_retrieval_eval.py --show dish_soap_under_5       # print the top 10 for one query
 
 Calls ProductStore.search directly (no LLM, no MCP transport), so it is fast and deterministic.
 Queries and relevance criteria: eval/retrieval/queries.yaml (see the header there for how relevance is defined).
@@ -56,7 +56,9 @@ class Judge:
                      + df["description"].fillna("")).str.lower(),
             "category": df["category"].fillna("").str.lower(),
         }
-        self.age = df["age_min_years"]
+        # Manufacturer minimum age; only toy catalogs have it (unknown age never satisfies `age_max`).
+        age = df["age_min_years"] if "age_min_years" in df else pd.Series(None, index=df.index)
+        self.age = pd.to_numeric(age, errors="coerce")
 
     def _match(self, spec: dict) -> pd.Series:
         mask = pd.Series(True, index=self.age.index)
@@ -68,6 +70,9 @@ class Judge:
                 for sub in pats:
                     alt |= self._match(sub)
                 mask &= alt
+            elif key == "all":                                   # AND of sub-specs, e.g. two title conditions
+                for sub in pats:
+                    mask &= self._match(sub)
             else:
                 rx = "|".join(f"(?:{p})" for p in pats)
                 mask &= self.fields[key].str.contains(rx, case=False, regex=True)
@@ -166,7 +171,7 @@ def run(modes, query_file: Path) -> dict:
                          "described_mrr": mean(e["mrr"] for e in kd), "attribute_p5": mean(e["p5"] for e in at),
                          "attribute_ndcg10": mean(e["ndcg10"] for e in at), "latency_ms_mean": mean(lat)}
 
-    # Paired comparison on the same attribute queries: averages over 24 queries hide how many queries moved.
+    # Paired comparison on the same attribute queries: averages over the attribute queries hide how many moved.
     paired = {}
     if "hybrid" in modes:
         at_ids = [q["id"] for q in queries if q["type"] == "attribute"]
@@ -186,6 +191,7 @@ def run(modes, query_file: Path) -> dict:
         labels = {
             "strong_precision_top5": s_rel / (s_rel + s_irr) if s_rel + s_irr else None,
             "strong_recall_top5": s_rel / (s_rel + w_rel) if s_rel + w_rel else None,
+            "strong_counts_top5": {"relevant_strong": s_rel, "irrelevant_strong": s_irr, "relevant_weak": w_rel},
             "attribute_missed_match": [qid for qid, v in L.items() if per_query[qid]["type"] == "attribute" and v["missed_match"]],
             "known_item_found_but_weak": [qid for qid, v in L.items()
                                           if per_query[qid]["type"] == "known_item" and v["target_in_top5"] and not v["target_strong"]],
@@ -224,9 +230,12 @@ def to_markdown(rep: dict) -> str:
                          f"{', '.join(f'`{q}`' for q in c['worse_on'])} |")
     L = rep.get("labels")
     if L:
+        c = L["strong_counts_top5"]
         lines += ["", "## Relevance labels (`hybrid`, what the agent sees)", "",
-                  f"- `strong` precision in the top 5 of attribute queries: **{L['strong_precision_top5']:.2f}**",
-                  f"- `strong` recall in the top 5 of attribute queries: **{L['strong_recall_top5']:.2f}**",
+                  f"- `strong` precision in the top 5 of attribute queries: **{L['strong_precision_top5']:.3f}** "
+                  f"({c['relevant_strong']} of {c['relevant_strong'] + c['irrelevant_strong']} strong hits are relevant)",
+                  f"- `strong` recall in the top 5 of attribute queries: **{L['strong_recall_top5']:.3f}** "
+                  f"({c['relevant_strong']} of {c['relevant_strong'] + c['relevant_weak']} relevant hits are strong)",
                   f"- Attribute queries where a relevant product was retrieved but none was labelled strong (agent would "
                   f"say \"not found\"): {len(L['attribute_missed_match'])}/{L['counts']['attribute']} "
                   f"{', '.join(f'`{q}`' for q in L['attribute_missed_match'])}",

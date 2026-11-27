@@ -42,8 +42,8 @@ class Intent(BaseModel):
     constraints: Constraints = Field(default_factory=Constraints)
     named_products: list[str] = Field(
         default_factory=list,
-        description="Specific products the user names by title or model in THIS message (e.g. 'LEGO Classic Creative "
-                    "Suitcase 10713'), max 2. Not generic types such as 'a LEGO set'.")
+        description="Specific products the user names by title or model in THIS message (e.g. 'Easy-Off Heavy Duty Oven "
+                    "Cleaner'), max 2. Not generic types such as 'a Clorox product'.")
     wants_live_info: bool = Field(False, description="User asked for current/latest price or availability")
     safety_flag: SafetyFlag = "none"
     safety_reason: str = ""

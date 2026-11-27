@@ -29,10 +29,10 @@ st.set_page_config(page_title="ShopVoice · voice product discovery", page_icon=
 settings = get_settings()
 
 EXAMPLES = [
-    ("Search", "I need a wooden puzzle for a 2 year old under twenty dollars"),
-    ("Live price", "What's the current price of the Melissa and Doug safari chunky puzzle?"),
-    ("Two asks", "Show me a LEGO set under five dollars, and check the LEGO Classic Creative Suitcase price"),
-    ("No match", "Recommend an eco-friendly stainless steel cleaner under fifteen dollars"),
+    ("Search", "Recommend an eco-friendly stainless steel cleaner under fifteen dollars"),
+    ("Live price", "What's the current price of the Easy-Off heavy duty oven cleaner?"),
+    ("Rating", "Find a fragrance free laundry detergent rated at least four and a half stars under twenty dollars"),
+    ("No match", "I need a robot vacuum under fifty dollars"),
     ("Blocked", "Which cleaners can I mix with bleach to make it stronger?"),
     ("Out of scope", "Great, place the order for the first one and send me the receipt"),
 ]
@@ -555,7 +555,8 @@ def card_retriever(update, detail, state):
         st.dataframe(pd.DataFrame([{
             "doc_id": e["doc_id"], "title": e["title"][:70], "price": money(e.get("price")),
             "live price": money((e.get("live") or {}).get("price")) if e.get("live") else "–",
-            "age": e.get("recommended_age") or "–", "brand": e.get("brand") or "–",
+            "rating": (f"{e['rating']:.1f} ({e.get('rating_count') or 0:,})" if e.get("rating") is not None else "–"),
+            "brand": e.get("brand") or "–",
             "named by user": "yes" if e.get("named") else "", "note": e.get("budget_note") or ""} for e in evidence]),
             hide_index=True, use_container_width=True)
     elif update.get("near_misses"):
@@ -621,13 +622,18 @@ def picks_html(recs: list[dict], max_price) -> str:
     out = []
     for i, r in enumerate(recs, 1):
         tags = []
-        if r.get("recommended_age"):
-            tags.append(chip("age", r["recommended_age"]))
+        if r.get("rating") is not None:
+            tags.append(chip("rating", f"{r['rating']:.1f}★ · {r.get('rating_count') or 0:,} ratings"))
+        if r.get("claims"):
+            tags.append(chip("listing says", r["claims"]))
+        if r.get("scent"):
+            tags.append(chip("scent", r["scent"]))
+        if r.get("size"):
+            tags.append(chip("size", r["size"]))
         if r.get("ingredients"):
-            tags.append(chip("materials", r["ingredients"]))
+            tags.append(chip("ingredients / materials", r["ingredients"]))
         if r.get("brand"):
             tags.append(chip("brand", r["brand"] + (" (inferred)" if r.get("brand_inferred") else "")))
-        tags.append(chip("rating", f"{r['rating']:.1f}" if r.get("rating") is not None else "n/a"))
         if r.get("budget_note"):
             tags.append('<span class="sv-chip over">over budget</span>')
         tags.append(f'<span class="sv-chip cite">📦 {esc(r["doc_id"])}</span>')
@@ -636,7 +642,7 @@ def picks_html(recs: list[dict], max_price) -> str:
         live = f'<div class="lv">live {money(r["live_price"])}</div>' if r.get("live_price") else ""
         out.append(f'<div class="sv-pick{" top" if i == 1 else ""}"><div class="rk">{i}</div>'
                    f'<div><div class="nm">{esc(r["title"])}</div><div class="why">{esc(r["why"])}</div></div>'
-                   f'<div class="pr"><b>{money(r.get("price"))}</b><small>catalog, Jan 2020</small>{live}</div>'
+                   f'<div class="pr"><b>{money(r.get("price"))}</b><small>catalog, 2023</small>{live}</div>'
                    f'<div class="sv-tags">{"".join(tags)}</div></div>')
     return "".join(out)
 
@@ -678,11 +684,14 @@ def render_answer(result: dict, autoplay: bool) -> None:
         if recs:
             rows = [{
                 "#": i, "Product": r["title"],
-                "Price (catalog, 2020)": money(r.get("price")),
+                "Price (catalog, 2023)": money(r.get("price")),
                 "Live price": money(r.get("live_price")) if r.get("live_price") else "-",
                 "Rating": f"{r['rating']:.1f}" if r.get("rating") is not None else "n/a",
-                "Ingredients / materials": r.get("ingredients") or "n/a",
-                "Recommended age": r.get("recommended_age") or "n/a",
+                "Ratings": f"{r.get('rating_count') or 0:,}",
+                "Unit price": (f"${r['price_per_oz']:.2f}/oz" if r.get("price_per_oz") else
+                               f"${r['price_per_count']:.2f}/count" if r.get("price_per_count") else "n/a"),
+                "Listing claims": r.get("claims") or "n/a",
+                "Ingredients / materials": r.get("ingredients") or "not listed",
                 "Brand": (r.get("brand") or "n/a") + (" *" if r.get("brand_inferred") and r.get("brand") else ""),
                 "Why": r["why"],
                 "Source": "Catalog" + (" + live web" if r.get("live_url") else ""),
@@ -692,7 +701,8 @@ def render_answer(result: dict, autoplay: bool) -> None:
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
                          column_config={"Live source": st.column_config.LinkColumn(display_text="open"),
                                         "Why": st.column_config.TextColumn(width="large")})
-            st.caption("* brand inferred from the product title. Ratings are n/a because the 2020 dataset has none.")
+            st.caption("* brand inferred from the product title. Ratings are the dataset's average stars and rating counts "
+                       "(no review text). Listing claims are the seller's wording, not verified.")
         else:
             st.caption("Nothing to compare.")
     with t_notes:

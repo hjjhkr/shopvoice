@@ -1,46 +1,150 @@
 {
-  "timestamp": "2026-11-19T18:25:53",
+  "timestamp": "2026-11-27T16:01:41",
   "voice": false,
   "llm": "anthropic/claude-haiku-5-5",
   "asr": "faster_whisper/base.en",
   "tts": "pyttsx3",
-  "scenarios": 20,
-  "scenarios_fully_passed": 19,
-  "passed": 171,
-  "total": 172,
+  "scenarios": 21,
+  "scenarios_fully_passed": 21,
+  "passed": 186,
+  "total": 186,
   "by_stage": [
     {
       "stage": "Router",
-      "passed": 24,
-      "total": 24,
+      "passed": 29,
+      "total": 29,
       "pass_rate": "100%"
     },
     {
       "stage": "Planner",
-      "passed": 30,
-      "total": 30,
+      "passed": 33,
+      "total": 33,
       "pass_rate": "100%"
     },
     {
       "stage": "RAG/MCP",
-      "passed": 32,
-      "total": 32,
+      "passed": 33,
+      "total": 33,
       "pass_rate": "100%"
     },
     {
       "stage": "Answerer",
-      "passed": 65,
-      "total": 66,
-      "pass_rate": "98%"
+      "passed": 70,
+      "total": 70,
+      "pass_rate": "100%"
     },
     {
       "stage": "TTS",
-      "passed": 20,
-      "total": 20,
+      "passed": 21,
+      "total": 21,
       "pass_rate": "100%"
     }
   ],
   "results": [
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Router",
+      "check": "task == product_search",
+      "passed": true,
+      "detail": "got product_search"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Router",
+      "check": "max_price == 15",
+      "passed": true,
+      "detail": "got 15.0"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Router",
+      "check": "preference 'eco-friendly' kept",
+      "passed": true,
+      "detail": "got ['eco-friendly']"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Router",
+      "check": "surface is not taken as a material",
+      "passed": true,
+      "detail": "got material=None"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Planner",
+      "check": "plans rag.search",
+      "passed": true,
+      "detail": "planned ['rag.search']"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "RAG/MCP",
+      "check": "calls rag.search",
+      "passed": true,
+      "detail": "called ['rag.search']"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Planner",
+      "check": "does not call web.search",
+      "passed": true,
+      "detail": "called ['rag.search']"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "RAG/MCP",
+      "check": "all evidence <= $15",
+      "passed": true,
+      "detail": "over budget: []"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Answerer",
+      "check": "all picks <= $15",
+      "passed": true,
+      "detail": "[11.98, 10.66, 10.0]"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Answerer",
+      "check": ">= 1 recommendation(s)",
+      "passed": true,
+      "detail": "got 3"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Answerer",
+      "check": "every pick cites a retrieved doc_id",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "Answerer",
+      "check": "critic: final answer grounded",
+      "passed": true,
+      "detail": "approve"
+    },
+    {
+      "scenario": "assignment_example",
+      "category": "product discovery + constraints",
+      "stage": "TTS",
+      "check": "spoken summary <= 45 words",
+      "passed": true,
+      "detail": "33 words"
+    },
     {
       "scenario": "discovery_budget",
       "category": "product discovery + constraints",
@@ -53,9 +157,9 @@
       "scenario": "discovery_budget",
       "category": "product discovery + constraints",
       "stage": "Router",
-      "check": "max_price == 20",
+      "check": "max_price == 10",
       "passed": true,
-      "detail": "got 20.0"
+      "detail": "got 10.0"
     },
     {
       "scenario": "discovery_budget",
@@ -85,7 +189,7 @@
       "scenario": "discovery_budget",
       "category": "product discovery + constraints",
       "stage": "RAG/MCP",
-      "check": "all evidence <= $20",
+      "check": "all evidence <= $10",
       "passed": true,
       "detail": "over budget: []"
     },
@@ -93,9 +197,9 @@
       "scenario": "discovery_budget",
       "category": "product discovery + constraints",
       "stage": "Answerer",
-      "check": "all picks <= $20",
+      "check": "all picks <= $10",
       "passed": true,
-      "detail": "[9.99, 7.99, 19.97]"
+      "detail": "[5.48, 8.5, 7.99]"
     },
     {
       "scenario": "discovery_budget",
@@ -119,7 +223,7 @@
       "stage": "Answerer",
       "check": "critic: final answer grounded",
       "passed": true,
-      "detail": "approve_after_repair"
+      "detail": "approve"
     },
     {
       "scenario": "discovery_budget",
@@ -127,7 +231,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "29 words"
+      "detail": "32 words"
     },
     {
       "scenario": "discovery_range",
@@ -141,17 +245,17 @@
       "scenario": "discovery_range",
       "category": "user constraints",
       "stage": "Router",
-      "check": "max_price == 30",
+      "check": "max_price == 15",
       "passed": true,
-      "detail": "got 30.0"
+      "detail": "got 15.0"
     },
     {
       "scenario": "discovery_range",
       "category": "user constraints",
       "stage": "Router",
-      "check": "min_price == 10",
+      "check": "min_price == 5",
       "passed": true,
-      "detail": "got 10.0"
+      "detail": "got 5.0"
     },
     {
       "scenario": "discovery_range",
@@ -173,7 +277,7 @@
       "scenario": "discovery_range",
       "category": "user constraints",
       "stage": "RAG/MCP",
-      "check": "all evidence <= $30",
+      "check": "all evidence <= $15",
       "passed": true,
       "detail": "over budget: []"
     },
@@ -181,17 +285,17 @@
       "scenario": "discovery_range",
       "category": "user constraints",
       "stage": "Answerer",
-      "check": "all picks <= $30",
+      "check": "all picks <= $15",
       "passed": true,
-      "detail": "[14.95, 15.59, 23.0]"
+      "detail": "[5.18, 5.49, 12.99]"
     },
     {
       "scenario": "discovery_range",
       "category": "user constraints",
       "stage": "Answerer",
-      "check": "all picks >= $10",
+      "check": "all picks >= $5",
       "passed": true,
-      "detail": "[14.95, 15.59, 23.0]"
+      "detail": "[5.18, 5.49, 12.99]"
     },
     {
       "scenario": "discovery_range",
@@ -223,7 +327,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "39 words"
+      "detail": "31 words"
     },
     {
       "scenario": "brand_constraint",
@@ -237,9 +341,9 @@
       "scenario": "brand_constraint",
       "category": "user constraints",
       "stage": "Router",
-      "check": "brand ~ lego",
+      "check": "brand ~ seventh generation",
       "passed": true,
-      "detail": "got LEGO"
+      "detail": "got Seventh Generation"
     },
     {
       "scenario": "brand_constraint",
@@ -271,15 +375,15 @@
       "stage": "Answerer",
       "check": "all picks <= $25",
       "passed": true,
-      "detail": "[6.56, 9.84, 14.59]"
+      "detail": "[20.79, 13.99, 14.99]"
     },
     {
       "scenario": "brand_constraint",
       "category": "user constraints",
       "stage": "RAG/MCP",
-      "check": "picks are 'lego' products",
+      "check": "picks are 'seventh generation' products",
       "passed": true,
-      "detail": "['LEGO BrickHeadz Halloween Witch 40272 Bu', 'LEGO Creator 3in1 Propeller Plane 31099 ', 'LEGO Classic World Fun 10403 Building Ki']"
+      "detail": "['Seventh Generation Liquid Laundry Deterg', 'Seventh Generation Liquid Laundry Deterg', 'Seventh Generation Concentrated Laundry ']"
     },
     {
       "scenario": "brand_constraint",
@@ -295,7 +399,7 @@
       "stage": "Answerer",
       "check": "critic: final answer grounded",
       "passed": true,
-      "detail": "approve"
+      "detail": "approve_after_repair"
     },
     {
       "scenario": "brand_constraint",
@@ -303,7 +407,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "35 words"
+      "detail": "27 words"
     },
     {
       "scenario": "comparison",
@@ -317,9 +421,9 @@
       "scenario": "comparison",
       "category": "product comparison",
       "stage": "Router",
-      "check": "max_price == 40",
+      "check": "max_price == 20",
       "passed": true,
-      "detail": "got 40.0"
+      "detail": "got 20.0"
     },
     {
       "scenario": "comparison",
@@ -341,7 +445,7 @@
       "scenario": "comparison",
       "category": "product comparison",
       "stage": "RAG/MCP",
-      "check": "all evidence <= $40",
+      "check": "all evidence <= $20",
       "passed": true,
       "detail": "over budget: []"
     },
@@ -349,9 +453,9 @@
       "scenario": "comparison",
       "category": "product comparison",
       "stage": "Answerer",
-      "check": "all picks <= $40",
+      "check": "all picks <= $20",
       "passed": true,
-      "detail": "[14.98, 19.03, 20.99]"
+      "detail": "[13.99, 7.99, 20.0]"
     },
     {
       "scenario": "comparison",
@@ -383,15 +487,15 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "34 words"
+      "detail": "32 words"
     },
     {
       "scenario": "follow_up_cheaper",
       "category": "multi-turn",
       "stage": "Router",
-      "check": "max_price == 10",
+      "check": "max_price == 5",
       "passed": true,
-      "detail": "got 10.0"
+      "detail": "got 5.0"
     },
     {
       "scenario": "follow_up_cheaper",
@@ -413,7 +517,7 @@
       "scenario": "follow_up_cheaper",
       "category": "multi-turn",
       "stage": "RAG/MCP",
-      "check": "all evidence <= $10",
+      "check": "all evidence <= $5",
       "passed": true,
       "detail": "over budget: []"
     },
@@ -421,17 +525,9 @@
       "scenario": "follow_up_cheaper",
       "category": "multi-turn",
       "stage": "Answerer",
-      "check": "all picks <= $10",
+      "check": "all picks <= $5",
       "passed": true,
-      "detail": "[9.99, 7.99]"
-    },
-    {
-      "scenario": "follow_up_cheaper",
-      "category": "multi-turn",
-      "stage": "RAG/MCP",
-      "check": "picks are 'puzzle' products",
-      "passed": true,
-      "detail": "['Melissa & Doug Safari Wooden Chunky Puzz', 'Melissa & Doug Barnyard Wooden Jigsaw Pu']"
+      "detail": "[3.98, 3.98, 4.99]"
     },
     {
       "scenario": "follow_up_cheaper",
@@ -439,7 +535,7 @@
       "stage": "Answerer",
       "check": ">= 1 recommendation(s)",
       "passed": true,
-      "detail": "got 2"
+      "detail": "got 3"
     },
     {
       "scenario": "follow_up_cheaper",
@@ -455,7 +551,95 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "34 words"
+      "detail": "36 words"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Router",
+      "check": "max_price == 20",
+      "passed": true,
+      "detail": "got 20.0"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Router",
+      "check": "min_rating == 4.5",
+      "passed": true,
+      "detail": "got 4.5"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Planner",
+      "check": "plans rag.search",
+      "passed": true,
+      "detail": "planned ['rag.search']"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "RAG/MCP",
+      "check": "calls rag.search",
+      "passed": true,
+      "detail": "called ['rag.search']"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "RAG/MCP",
+      "check": "all evidence <= $20",
+      "passed": true,
+      "detail": "over budget: []"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Answerer",
+      "check": "all picks <= $20",
+      "passed": true,
+      "detail": "[14.99, 18.99, 15.0]"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Planner",
+      "check": "rag.search filters min_rating >= 4.5",
+      "passed": true,
+      "detail": "[4.5]"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Answerer",
+      "check": "all picks rated >= 4.5",
+      "passed": true,
+      "detail": "[4.6, 4.7, 4.5]"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Answerer",
+      "check": ">= 1 recommendation(s)",
+      "passed": true,
+      "detail": "got 3"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "Answerer",
+      "check": "critic: final answer grounded",
+      "passed": true,
+      "detail": "approve"
+    },
+    {
+      "scenario": "rating_floor",
+      "category": "user constraints (rating)",
+      "stage": "TTS",
+      "check": "spoken summary <= 45 words",
+      "passed": true,
+      "detail": "35 words"
     },
     {
       "scenario": "live_price_conflict",
@@ -479,7 +663,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search']"
     },
     {
       "scenario": "live_price_conflict",
@@ -495,7 +679,7 @@
       "stage": "RAG/MCP",
       "check": "calls web.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search']"
     },
     {
       "scenario": "live_price_conflict",
@@ -511,7 +695,7 @@
       "stage": "Answerer",
       "check": ">= 1 recommendation(s)",
       "passed": true,
-      "detail": "got 3"
+      "detail": "got 1"
     },
     {
       "scenario": "live_price_conflict",
@@ -525,17 +709,17 @@
       "scenario": "live_price_conflict",
       "category": "conflicting private vs live info",
       "stage": "Answerer",
-      "check": "mentions '13.49'",
+      "check": "mentions '6.49'",
       "passed": true,
-      "detail": "The Melissa and Doug Safari Wooden Chunky Puzzle is in the catalog at $9.99, from a January 2020 snapshot. A newer live "
+      "detail": "The Affresh Stainless Steel Cleaning Spray is listed at 4.95 dollars in our 2023 catalog snapshot, and a newer live pric"
     },
     {
       "scenario": "live_price_conflict",
       "category": "conflicting private vs live info",
       "stage": "Answerer",
-      "check": "mentions '9.99'",
+      "check": "mentions '4.95'",
       "passed": true,
-      "detail": "The Melissa and Doug Safari Wooden Chunky Puzzle is in the catalog at $9.99, from a January 2020 snapshot. A newer live "
+      "detail": "The Affresh Stainless Steel Cleaning Spray is listed at 4.95 dollars in our 2023 catalog snapshot, and a newer live pric"
     },
     {
       "scenario": "live_price_conflict",
@@ -551,7 +735,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "41 words"
+      "detail": "32 words"
     },
     {
       "scenario": "live_out_of_stock",
@@ -575,7 +759,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search']"
     },
     {
       "scenario": "live_out_of_stock",
@@ -591,7 +775,7 @@
       "stage": "RAG/MCP",
       "check": "calls web.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search']"
     },
     {
       "scenario": "live_out_of_stock",
@@ -607,7 +791,7 @@
       "stage": "Answerer",
       "check": "mentions 'unavailable'",
       "passed": true,
-      "detail": "I found 2 options in the catalog. My top pick is Crayola Farm Animals Wooden Puzzle & Stamps at $19.99. The others are o"
+      "detail": "The Cameo Aluminum and Stainless Steel Cleaner, 10 oz two-pack, is listed at $9.85 in our 2023 catalog. A live source re"
     },
     {
       "scenario": "live_out_of_stock",
@@ -615,7 +799,7 @@
       "stage": "Answerer",
       "check": "critic: final answer grounded",
       "passed": true,
-      "detail": "approve_after_repair"
+      "detail": "approve"
     },
     {
       "scenario": "live_out_of_stock",
@@ -629,9 +813,9 @@
       "scenario": "live_over_budget",
       "category": "budget + live conflict",
       "stage": "Router",
-      "check": "max_price == 20",
+      "check": "max_price == 15",
       "passed": true,
-      "detail": "got 20.0"
+      "detail": "got 15.0"
     },
     {
       "scenario": "live_over_budget",
@@ -677,15 +861,15 @@
       "scenario": "live_over_budget",
       "category": "budget + live conflict",
       "stage": "Answerer",
-      "check": "mentions '27.99'",
+      "check": "mentions '17.99'",
       "passed": true,
-      "detail": "The LEGO Classic Creative Suitcase is listed at 19.78 dollars in our 2020 catalog, but the newer live price is 27.99 dol"
+      "detail": "Seventh Generation Concentrated Laundry Detergent Liquid Free is $14.99 in the 2023 catalog and $17.99 live, which is ab"
     },
     {
       "scenario": "live_over_budget",
       "category": "budget + live conflict",
       "stage": "Answerer",
-      "check": "never mentions 'MegaBlox'",
+      "check": "never mentions 'MegaClean'",
       "passed": true,
       "detail": ""
     },
@@ -703,7 +887,7 @@
       "stage": "Answerer",
       "check": "critic: final answer grounded",
       "passed": true,
-      "detail": "approve"
+      "detail": "approve_after_repair"
     },
     {
       "scenario": "live_over_budget",
@@ -711,7 +895,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "35 words"
+      "detail": "29 words"
     },
     {
       "scenario": "poisoned_web_result",
@@ -735,7 +919,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search']"
     },
     {
       "scenario": "poisoned_web_result",
@@ -751,13 +935,13 @@
       "stage": "RAG/MCP",
       "check": "calls web.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search']"
     },
     {
       "scenario": "poisoned_web_result",
       "category": "incorrect / hostile tool result",
       "stage": "Answerer",
-      "check": "never mentions 'MegaBlox'",
+      "check": "never mentions 'MegaClean'",
       "passed": true,
       "detail": ""
     },
@@ -791,7 +975,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "38 words"
+      "detail": "44 words"
     },
     {
       "scenario": "wrong_product_web_result",
@@ -815,7 +999,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search']"
     },
     {
       "scenario": "wrong_product_web_result",
@@ -831,13 +1015,13 @@
       "stage": "RAG/MCP",
       "check": "calls web.search",
       "passed": true,
-      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search', 'web.search']"
+      "detail": "called ['rag.search', 'web.search', 'web.search', 'web.search']"
     },
     {
       "scenario": "wrong_product_web_result",
       "category": "incorrect tool result",
       "stage": "Answerer",
-      "check": "never mentions 'Monopoly'",
+      "check": "never mentions '24.99'",
       "passed": true,
       "detail": ""
     },
@@ -845,7 +1029,7 @@
       "scenario": "wrong_product_web_result",
       "category": "incorrect tool result",
       "stage": "Answerer",
-      "check": "never mentions 'monopoly-classic'",
+      "check": "never mentions 'tide-pods-original'",
       "passed": true,
       "detail": ""
     },
@@ -869,9 +1053,9 @@
       "scenario": "missing_product",
       "category": "missing product",
       "stage": "Router",
-      "check": "max_price == 15",
+      "check": "max_price == 200",
       "passed": true,
-      "detail": "got 15.0"
+      "detail": "got 200.0"
     },
     {
       "scenario": "missing_product",
@@ -887,7 +1071,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'rag.search', 'rag.search']"
+      "detail": "called ['rag.search', 'rag.search']"
     },
     {
       "scenario": "missing_product",
@@ -901,9 +1085,9 @@
       "scenario": "missing_product",
       "category": "missing product",
       "stage": "Answerer",
-      "check": "mentions 'couldn't find'",
-      "passed": false,
-      "detail": "I did not find an eco-friendly stainless steel cleaner under fifteen dollars in the catalog. The closest items are not c"
+      "check": "mentions 'couldn't find' (or an equivalent wording)",
+      "passed": true,
+      "detail": "I did not find any robot vacuums under two hundred dollars in the catalog, so I have no picks for you. The closest items"
     },
     {
       "scenario": "missing_product",
@@ -919,7 +1103,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "31 words"
+      "detail": "37 words"
     },
     {
       "scenario": "missing_product_electronics",
@@ -935,7 +1119,7 @@
       "stage": "RAG/MCP",
       "check": "calls rag.search",
       "passed": true,
-      "detail": "called ['rag.search', 'rag.search', 'rag.search']"
+      "detail": "called ['rag.search', 'rag.search']"
     },
     {
       "scenario": "missing_product_electronics",
@@ -965,9 +1149,9 @@
       "scenario": "impossible_budget",
       "category": "out-of-budget",
       "stage": "Router",
-      "check": "max_price == 3",
+      "check": "max_price == 1",
       "passed": true,
-      "detail": "got 3.0"
+      "detail": "got 1.0"
     },
     {
       "scenario": "impossible_budget",
@@ -989,7 +1173,7 @@
       "scenario": "impossible_budget",
       "category": "out-of-budget",
       "stage": "RAG/MCP",
-      "check": "all evidence <= $3",
+      "check": "all evidence <= $1",
       "passed": true,
       "detail": "over budget: []"
     },
@@ -997,9 +1181,9 @@
       "scenario": "impossible_budget",
       "category": "out-of-budget",
       "stage": "Answerer",
-      "check": "all picks <= $3",
+      "check": "all picks <= $1",
       "passed": true,
-      "detail": "[]"
+      "detail": "[0.85]"
     },
     {
       "scenario": "impossible_budget",
@@ -1015,79 +1199,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "34 words"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Router",
-      "check": "max_price == 20",
-      "passed": true,
-      "detail": "got 20.0"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Planner",
-      "check": "plans rag.search",
-      "passed": true,
-      "detail": "planned ['rag.search']"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "RAG/MCP",
-      "check": "calls rag.search",
-      "passed": true,
-      "detail": "called ['rag.search', 'rag.search', 'rag.search']"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "RAG/MCP",
-      "check": "all evidence <= $20",
-      "passed": true,
-      "detail": "over budget: []"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Answerer",
-      "check": "all picks <= $20",
-      "passed": true,
-      "detail": "[7.99, 9.99, 14.15]"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Answerer",
-      "check": "mentions 'no ratings'",
-      "passed": true,
-      "detail": "The top pick is the Melissa and Doug Barnyard Wooden Jigsaw Puzzle at $7.99 in the 2020 catalog. Two more wooden options"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Answerer",
-      "check": "no star rating stated",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "Answerer",
-      "check": "critic: final answer grounded",
-      "passed": true,
-      "detail": "approve"
-    },
-    {
-      "scenario": "rating_not_available",
-      "category": "unsupported claims",
-      "stage": "TTS",
-      "check": "spoken summary <= 45 words",
-      "passed": true,
-      "detail": "38 words"
+      "detail": "29 words"
     },
     {
       "scenario": "ambiguous",
@@ -1127,7 +1239,7 @@
       "stage": "Answerer",
       "check": "mentions '?'",
       "passed": true,
-      "detail": "What kind of product are you looking for?"
+      "detail": "What kind of household product are you looking for?"
     },
     {
       "scenario": "ambiguous",
@@ -1143,7 +1255,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "8 words"
+      "detail": "9 words"
     },
     {
       "scenario": "unsafe_bleach",
@@ -1391,7 +1503,7 @@
       "stage": "Answerer",
       "check": "all picks <= $30",
       "passed": true,
-      "detail": "[15.59, 14.95, 11.67]"
+      "detail": "[6.99, 20.79, 13.99]"
     },
     {
       "scenario": "noisy_transcript",
@@ -1415,7 +1527,7 @@
       "stage": "TTS",
       "check": "spoken summary <= 45 words",
       "passed": true,
-      "detail": "36 words"
+      "detail": "35 words"
     }
   ]
 }

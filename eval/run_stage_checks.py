@@ -73,6 +73,14 @@ def check(sc: dict, result: dict, voice: bool, said: str) -> list[dict]:
             add("Router", f"{key} == {exp[key]}", c.get(key) is not None and abs(c[key] - exp[key]) < 0.01, f"got {c.get(key)}")
     if "brand" in exp:
         add("Router", f"brand ~ {exp['brand']}", exp["brand"] in (c.get("brand") or "").lower(), f"got {c.get('brand')}")
+    if "min_rating" in exp:
+        add("Router", f"min_rating == {exp['min_rating']}", c.get("min_rating") is not None and abs(c["min_rating"] - exp["min_rating"]) < 0.01,
+            f"got {c.get('min_rating')}")
+    if "preference" in exp:
+        add("Router", f"preference '{exp['preference']}' kept", any(exp["preference"] in p.lower() for p in c.get("preferences") or []),
+            f"got {c.get('preferences')}")
+    if exp.get("no_material"):
+        add("Router", "surface is not taken as a material", not c.get("material"), f"got material={c.get('material')!r}")
     if "wants_live" in exp:
         add("Router", f"wants_live == {exp['wants_live']}", intent.get("wants_live_info") == exp["wants_live"],
             f"got {intent.get('wants_live_info')}")
@@ -86,6 +94,13 @@ def check(sc: dict, result: dict, voice: bool, said: str) -> list[dict]:
         add("RAG/MCP", f"all evidence <= ${exp['all_under']}", not over, f"over budget: {over}")
         add("Answerer", f"all picks <= ${exp['all_under']}", all(r["price"] <= exp["all_under"] for r in recs),
             str([r["price"] for r in recs]))
+    if "all_rating_at_least" in exp:
+        floor = exp["all_rating_at_least"]
+        rag_args = [x.get("args") or {} for x in calls if x["tool"] == "rag.search"]
+        add("Planner", f"rag.search filters min_rating >= {floor}", any((a.get("min_rating") or 0) >= floor for a in rag_args),
+            str([a.get("min_rating") for a in rag_args]))
+        add("Answerer", f"all picks rated >= {floor}", bool(recs) and all((r.get("rating") or 0) >= floor for r in recs),
+            str([r.get("rating") for r in recs]))
     if "all_over" in exp:
         add("Answerer", f"all picks >= ${exp['all_over']}", all(r["price"] >= exp["all_over"] for r in recs),
             str([r["price"] for r in recs]))
@@ -110,12 +125,6 @@ def check(sc: dict, result: dict, voice: bool, said: str) -> list[dict]:
             any(o.lower() in text.lower() for o in options), text[:120].replace("\n", " "))
     for needle in exp.get("text_not_contains", []):
         add("Answerer", f"never mentions '{needle}'", needle.lower() not in text.lower())
-    if exp.get("no_rating_claim"):
-        from voice_agent.safety import _is_denied
-        # A rating is "stated" only if asserted; "a minimum of 4.5 stars could not be checked" is the correct reply.
-        asserted = [m.group(0) for m in re.finditer(r"\b\d(\.\d)?[\s-]*(stars?|out of 5)\b", text, re.I)
-                    if not _is_denied(text, m.start(), m.end())]
-        add("Answerer", "no star rating stated", not asserted, str(asserted))
     critique = result.get("critique") or {}
     add("Answerer", "critic: final answer grounded", critique.get("grounded", True) is True, str(critique.get("verdict")))
     add("TTS", "spoken summary <= 45 words", len(spoken.split()) <= 45, f"{len(spoken.split())} words")

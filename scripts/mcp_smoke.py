@@ -25,9 +25,9 @@ async def main() -> None:
             for t in tools.tools:
                 print(f"\nTOOL {t.name}\n  {t.description}\n  schema: {json.dumps(t.inputSchema)}", flush=True)
             res = await asyncio.wait_for(
-                session.call_tool("rag.search", {"query": "wooden puzzle", "max_price": 20, "top_k": 2}), 120)
+                session.call_tool("rag.search", {"query": "eco-friendly stainless steel cleaner", "max_price": 15, "top_k": 2}), 120)
             print("\nrag.search ->", json.dumps(res.structuredContent)[:600], flush=True)
-            res = await asyncio.wait_for(session.call_tool("web.search", {"query": "lego classic price"}), 60)
+            res = await asyncio.wait_for(session.call_tool("web.search", {"query": "Affresh stainless steel cleaning spray price"}), 60)
             print("\nweb.search ->", json.dumps(res.structuredContent)[:600], flush=True)
 
 
